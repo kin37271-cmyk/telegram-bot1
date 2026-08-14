@@ -14,11 +14,11 @@ import qrcode
 # SOZLAMALAR
 # =========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "BOT_TOKENINGIZNI_BU_YERGA_QOYING")
+BOT_TOKEN = os.getenv("8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI")
 
 # O'zingizning Telegram ID'ingizni yozing
 ADMIN_IDS = {
-    123456789
+    7600986332
 }
 
 # Karta raqamingizni shu yerga yozing
