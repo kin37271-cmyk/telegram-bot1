@@ -1,56 +1,78 @@
+# ============================================================
+# QR CODE BOT PRO
+# 1-QISM: SOZLAMALAR + DATABASE + MENYULAR
+# ============================================================
+
 import os
 import sqlite3
-import telebot
 import qrcode
-
+import telebot
 from telebot import types
 
-# =========================================================
+# ============================================================
 # SOZLAMALAR
-# =========================================================
+# ============================================================
 
-BOT_TOKEN = "8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI"
-ADMIN_ID = 7600986332  # Telegram ID'ingizni yozing
+BOT_TOKEN = "BOT_TOKENINGIZNI_SHU_YERGA_YOZING"
 
+# O'Z TELEGRAM IDINGIZNI YOZING
+ADMIN_ID = 123456789
+
+# 1 ta QR narxi
 QR_PRICE = 300
+
+# Hisob to'ldirish minimumi
 MIN_PAYMENT = 2000
 
+# Karta
 CARD_NUMBER = "6262 7201 2331 5395"
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
-
+# Database
 DB_NAME = "qr_bot.db"
 
+# Bot
+bot = telebot.TeleBot(
+    BOT_TOKEN,
+    parse_mode="HTML"
+)
 
-# =========================================================
+
+# ============================================================
 # DATABASE
-# =========================================================
+# ============================================================
 
-def db_connect():
+def get_db():
     return sqlite3.connect(DB_NAME)
 
 
-def init_db():
-    conn = db_connect()
-    cur = conn.cursor()
+def create_database():
 
-    cur.execute("""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # USERS
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT DEFAULT '',
             first_name TEXT DEFAULT '',
             phone TEXT DEFAULT '',
             balance INTEGER DEFAULT 0,
-            blocked INTEGER DEFAULT 0
+            total_deposited INTEGER DEFAULT 0,
+            total_spent INTEGER DEFAULT 0,
+            total_bonus INTEGER DEFAULT 0,
+            blocked INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    cur.execute("""
+    # PAYMENTS
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            username TEXT,
-            phone TEXT,
+            username TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
             amount INTEGER,
             photo_id TEXT,
             status TEXT DEFAULT 'pending',
@@ -62,170 +84,324 @@ def init_db():
     conn.close()
 
 
-init_db()
+create_database()
 
 
-# =========================================================
-# USER FUNCTIONS
-# =========================================================
+# ============================================================
+# FOYDALANUVCHINI DATABASEGA QO'SHISH
+# ============================================================
 
 def add_user(user):
-    conn = db_connect()
-    cur = conn.cursor()
+
+    conn = get_db()
+    cursor = conn.cursor()
 
     username = user.username or ""
     first_name = user.first_name or ""
 
-    cur.execute("""
+    cursor.execute("""
         INSERT OR IGNORE INTO users
         (user_id, username, first_name)
         VALUES (?, ?, ?)
-    """, (user.id, username, first_name))
+    """, (
+        user.id,
+        username,
+        first_name
+    ))
 
-    cur.execute("""
+    cursor.execute("""
         UPDATE users
-        SET username = ?, first_name = ?
+        SET username = ?,
+            first_name = ?
         WHERE user_id = ?
-    """, (username, first_name, user.id))
+    """, (
+        username,
+        first_name,
+        user.id
+    ))
 
     conn.commit()
     conn.close()
 
 
-def get_user(user_id):
-    conn = db_connect()
-    cur = conn.cursor()
+# ============================================================
+# FOYDALANUVCHI MA'LUMOTI
+# ============================================================
 
-    cur.execute("""
-        SELECT user_id, username, first_name, phone, balance, blocked
+def get_user(user_id):
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            user_id,
+            username,
+            first_name,
+            phone,
+            balance,
+            total_deposited,
+            total_spent,
+            total_bonus,
+            blocked
         FROM users
         WHERE user_id = ?
     """, (user_id,))
 
-    result = cur.fetchone()
+    user = cursor.fetchone()
 
     conn.close()
 
-    return result
+    return user
 
+
+# ============================================================
+# BALANS
+# ============================================================
 
 def get_balance(user_id):
+
     user = get_user(user_id)
 
-    if not user:
-        return 0
+    if user:
+        return user[4]
 
-    return user[4]
+    return 0
 
 
-def change_balance(user_id, amount):
-    conn = db_connect()
-    cur = conn.cursor()
+# ============================================================
+# BLOKLANGANMI?
+# ============================================================
 
-    cur.execute("""
-        UPDATE users
-        SET balance = balance + ?
-        WHERE user_id = ?
-    """, (amount, user_id))
+def is_blocked(user_id):
+
+    user = get_user(user_id)
+
+    if user:
+        return user[8] == 1
+
+    return False
+
+
+# ============================================================
+# BALANSNI O'ZGARTIRISH
+# ============================================================
+
+def change_balance(user_id, amount, reason="deposit"):
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # PUL QO'SHISH
+    if amount > 0:
+
+        if reason == "bonus":
+
+            cursor.execute("""
+                UPDATE users
+                SET
+                    balance = balance + ?,
+                    total_bonus = total_bonus + ?
+                WHERE user_id = ?
+            """, (
+                amount,
+                amount,
+                user_id
+            ))
+
+        else:
+
+            cursor.execute("""
+                UPDATE users
+                SET
+                    balance = balance + ?,
+                    total_deposited = total_deposited + ?
+                WHERE user_id = ?
+            """, (
+                amount,
+                amount,
+                user_id
+            ))
+
+    # PUL AYIRISH
+    elif amount < 0:
+
+        cursor.execute("""
+            UPDATE users
+            SET
+                balance = balance + ?,
+                total_spent = total_spent + ?
+            WHERE user_id = ?
+        """, (
+            amount,
+            abs(amount),
+            user_id
+        ))
 
     conn.commit()
     conn.close()
 
 
-def set_phone(user_id, phone):
-    conn = db_connect()
-    cur = conn.cursor()
+# ============================================================
+# TELEFON SAQLASH
+# ============================================================
 
-    cur.execute("""
+def save_phone(user_id, phone):
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
         UPDATE users
         SET phone = ?
         WHERE user_id = ?
-    """, (phone, user_id))
+    """, (
+        phone,
+        user_id
+    ))
 
     conn.commit()
     conn.close()
 
 
-def is_blocked(user_id):
-    user = get_user(user_id)
+# ============================================================
+# ODDIY FOYDALANUVCHI MENYUSI
+# ============================================================
 
-    if not user:
-        return False
+def user_menu():
 
-    return user[5] == 1
-
-
-# =========================================================
-# ADMIN CHECK
-# =========================================================
-
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
-
-# =========================================================
-# MAIN MENU
-# =========================================================
-
-def main_menu():
-    markup = types.ReplyKeyboardMarkup(
+    keyboard = types.ReplyKeyboardMarkup(
         resize_keyboard=True,
         row_width=2
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("🧾 QR Code yaratish"),
         types.KeyboardButton("💰 Hisobim")
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("➕ Hisobni to‘ldirish"),
         types.KeyboardButton("📞 Telefon raqamim")
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("ℹ️ Yordam")
     )
 
-    return markup
+    return keyboard
 
+
+# ============================================================
+# ADMIN MENYUSI
+# ============================================================
 
 def admin_menu():
-    markup = types.ReplyKeyboardMarkup(
+
+    keyboard = types.ReplyKeyboardMarkup(
         resize_keyboard=True,
         row_width=2
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("👥 Foydalanuvchilar"),
         types.KeyboardButton("📊 Statistika")
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("💰 Hisobiga pul kiritish"),
-        types.KeyboardButton("🎁 Bonus berish")
+        types.KeyboardButton("➖ Hisobidan pul ayirish")
     )
 
-    markup.add(
-        types.KeyboardButton("📞 Telefon raqamini ko‘rish"),
+    keyboard.add(
+        types.KeyboardButton("🎁 Bonus berish"),
         types.KeyboardButton("💳 To‘lovlar")
     )
 
-    markup.add(
+    keyboard.add(
+        types.KeyboardButton("🔎 Foydalanuvchi"),
+        types.KeyboardButton("📞 Telefon raqamini ko‘rish")
+    )
+
+    keyboard.add(
         types.KeyboardButton("🚫 Bloklash"),
         types.KeyboardButton("✅ Blokdan chiqarish")
     )
 
-    markup.add(
+    keyboard.add(
         types.KeyboardButton("⬅️ Oddiy menyu")
     )
 
-    return markup
+    return keyboard
 
 
-# =========================================================
+# ============================================================
+# QR MENYU
+# ============================================================
+
+def qr_menu():
+
+    keyboard = types.InlineKeyboardMarkup(
+        row_width=2
+    )
+
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "🔗 Link",
+            callback_data="qr_link"
+        ),
+        types.InlineKeyboardButton(
+            "📝 Matn",
+            callback_data="qr_text"
+        )
+    )
+
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "📞 Telefon",
+            callback_data="qr_phone"
+        ),
+        types.InlineKeyboardButton(
+            "👤 Kontakt",
+            callback_data="qr_contact"
+        )
+    )
+
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "📍 Lokatsiya",
+            callback_data="qr_location"
+        ),
+        types.InlineKeyboardButton(
+            "📶 Wi-Fi",
+            callback_data="qr_wifi"
+        )
+    )
+
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "💳 To‘lov",
+            callback_data="qr_payment"
+        ),
+        types.InlineKeyboardButton(
+            "✈️ Telegram",
+            callback_data="qr_telegram"
+        )
+    )
+
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "📧 Email",
+            callback_data="qr_email"
+        )
+    )
+
+    return keyboard
+
+
+# ============================================================
 # START
-# =========================================================
+# ============================================================
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -233,1260 +409,172 @@ def start(message):
     add_user(message.from_user)
 
     if is_blocked(message.from_user.id):
+
         bot.send_message(
             message.chat.id,
             "🚫 Siz botdan foydalanishingiz bloklangan."
         )
+
         return
 
+    balance = get_balance(
+        message.from_user.id
+    )
+
     text = f"""
-<b>🤖 QR CODE YARATUVCHI BOT</b>
+<b>🤖 QR CODE PRO</b>
 
-Assalomu alaykum, <b>{message.from_user.first_name}</b>!
+Assalomu alaykum,
+<b>{message.from_user.first_name}</b>! 👋
 
-🧾 QR Code yaratish: <b>{QR_PRICE} so‘m</b>
+🧾 QR Code narxi:
+<b>{QR_PRICE:,} so‘m</b>
 
-💰 Balansingiz: <b>{get_balance(message.from_user.id):,} so‘m</b>
+💰 Sizning balansingiz:
+<b>{balance:,} so‘m</b>
 
-Kerakli bo‘limni tanlang 👇
+Quyidagi menyudan foydalaning 👇
 """
 
-    if is_admin(message.from_user.id):
+    if message.from_user.id == ADMIN_ID:
+
         bot.send_message(
             message.chat.id,
             text,
             reply_markup=admin_menu()
         )
+
     else:
+
         bot.send_message(
             message.chat.id,
             text,
-            reply_markup=main_menu()
+            reply_markup=user_menu()
         )
 
 
-# =========================================================
-# QR CODE YARATISH
-# =========================================================
-
-@bot.message_handler(func=lambda message: message.text == "🧾 QR Code yaratish")
-def qr_start(message):
-
-    if is_blocked(message.from_user.id):
-        return
-
-    balance = get_balance(message.from_user.id)
-
-    if balance < QR_PRICE:
-
-        need = QR_PRICE - balance
-
-        bot.send_message(
-            message.chat.id,
-            f"""
-❌ <b>Balansingiz yetarli emas.</b>
-
-💰 Balans: <b>{balance:,} so‘m</b>
-🧾 QR Code narxi: <b>{QR_PRICE:,} so‘m</b>
-
-💵 Yetishmayotgan summa: <b>{need:,} so‘m</b>
-
-Hisobingizni to‘ldiring.
-""",
-            reply_markup=main_menu()
-        )
-
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        """
-🧾 <b>QR Code yaratish</b>
-
-QR Code ichiga joylashtirmoqchi bo‘lgan
-<b>matn yoki linkni</b> yuboring.
-
-Masalan:
-
-https://google.com
-yoki
-Salom dunyo!
-"""
-    )
-
-    bot.register_next_step_handler(msg, create_qr)
-
-
-def create_qr(message):
-
-    if is_blocked(message.from_user.id):
-        return
-
-    text = message.text
-
-    if not text:
-        bot.send_message(
-            message.chat.id,
-            "❌ Matn yoki link yuboring."
-        )
-        return
-
-    balance = get_balance(message.from_user.id)
-
-    if balance < QR_PRICE:
-        bot.send_message(
-            message.chat.id,
-            "❌ Balansingiz yetarli emas."
-        )
-        return
-
-    filename = f"qr_{message.from_user.id}.png"
-
-    try:
-
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=10,
-            border=4
-        )
-
-        qr.add_data(text)
-        qr.make(fit=True)
-
-        image = qr.make_image(
-            fill_color="black",
-            back_color="white"
-        )
-
-        image.save(filename)
-
-        change_balance(
-            message.from_user.id,
-            -QR_PRICE
-        )
-
-        new_balance = get_balance(message.from_user.id)
-
-        with open(filename, "rb") as photo:
-
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption=f"""
-✅ <b>QR Code tayyor!</b>
-
-💸 Yechildi: <b>{QR_PRICE:,} so‘m</b>
-💰 Qolgan balans: <b>{new_balance:,} so‘m</b>
-"""
-            )
-
-        if os.path.exists(filename):
-            os.remove(filename)
-
-    except Exception as e:
-
-        bot.send_message(
-            message.chat.id,
-            f"❌ QR Code yaratishda xatolik:\n<code>{e}</code>"
-        )
-
-
-# =========================================================
+# ============================================================
 # HISOBIM
-# =========================================================
+# ============================================================
 
-@bot.message_handler(func=lambda message: message.text == "💰 Hisobim")
+@bot.message_handler(
+    func=lambda message:
+    message.text == "💰 Hisobim"
+)
 def my_balance(message):
 
-    balance = get_balance(message.from_user.id)
+    add_user(message.from_user)
+
+    user = get_user(
+        message.from_user.id
+    )
 
     bot.send_message(
         message.chat.id,
         f"""
-💰 <b>Hisobingiz</b>
+💰 <b>MENING HISOBIM</b>
 
-💵 Balans: <b>{balance:,} so‘m</b>
+💵 Joriy balans:
+<b>{user[4]:,} so‘m</b>
 
-🧾 1 ta QR Code: <b>{QR_PRICE:,} so‘m</b>
+📥 Jami kiritilgan:
+<b>{user[5]:,} so‘m</b>
 
-📦 Siz taxminan <b>{balance // QR_PRICE}</b> ta QR Code yaratishingiz mumkin.
+📤 Jami sarflangan:
+<b>{user[6]:,} so‘m</b>
+
+🎁 Jami bonus:
+<b>{user[7]:,} so‘m</b>
+
+🧾 QR narxi:
+<b>{QR_PRICE:,} so‘m</b>
 """,
-        reply_markup=main_menu()
+        reply_markup=user_menu()
     )
 
 
-# =========================================================
+# ============================================================
 # TELEFON RAQAMI
-# =========================================================
+# ============================================================
 
-@bot.message_handler(func=lambda message: message.text == "📞 Telefon raqamim")
+@bot.message_handler(
+    func=lambda message:
+    message.text == "📞 Telefon raqamim"
+)
 def phone_request(message):
 
-    markup = types.ReplyKeyboardMarkup(
+    keyboard = types.ReplyKeyboardMarkup(
         resize_keyboard=True,
         one_time_keyboard=True
     )
 
-    button = types.KeyboardButton(
-        "📱 Telefon raqamni yuborish",
-        request_contact=True
+    keyboard.add(
+        types.KeyboardButton(
+            "📱 Raqamni yuborish",
+            request_contact=True
+        )
     )
 
-    markup.add(button)
-    markup.add(types.KeyboardButton("⬅️ Orqaga"))
+    keyboard.add(
+        types.KeyboardButton("⬅️ Orqaga")
+    )
 
     bot.send_message(
         message.chat.id,
-        """
-📞 Telefon raqamingizni yuboring.
-
-Pastdagi tugmani bosing 👇
-""",
-        reply_markup=markup
+        "📞 Telefon raqamingizni yuboring:",
+        reply_markup=keyboard
     )
 
 
-@bot.message_handler(content_types=["contact"])
-def contact_handler(message):
+# ============================================================
+# TELEFONNI QABUL QILISH
+# ============================================================
 
-    if message.contact.user_id != message.from_user.id:
+@bot.message_handler(
+    content_types=["contact"]
+)
+def receive_phone(message):
+
+    if not message.contact:
+        return
+
+    if (
+        message.contact.user_id
+        and
+        message.contact.user_id != message.from_user.id
+    ):
         bot.send_message(
             message.chat.id,
-            "❌ Iltimos, o‘zingizning telefon raqamingizni yuboring."
+            "❌ Iltimos, o‘zingizning raqamingizni yuboring."
         )
         return
 
-    phone = message.contact.phone_number
-
-    set_phone(
+    save_phone(
         message.from_user.id,
-        phone
+        message.contact.phone_number
     )
 
     bot.send_message(
         message.chat.id,
         f"""
-✅ Telefon raqamingiz saqlandi.
+✅ <b>Telefon raqamingiz saqlandi!</b>
 
-📞 <b>{phone}</b>
+📞 Raqam:
+<b>{message.contact.phone_number}</b>
 """,
-        reply_markup=main_menu()
+        reply_markup=user_menu()
     )
 
 
-# =========================================================
-# HISOBNI TO‘LDIRISH
-# =========================================================
-
-@bot.message_handler(func=lambda message: message.text == "➕ Hisobni to‘ldirish")
-def deposit_start(message):
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-💳 <b>Hisobni to‘ldirish</b>
-
-💰 Minimal to‘lov: <b>{MIN_PAYMENT:,} so‘m</b>
-
-🏦 Karta raqami:
-
-<code>{CARD_NUMBER}</code>
-
-⚠️ To‘lovni amalga oshirgandan keyin
-chekni shu yerga <b>rasm qilib yuboring</b>.
-
-Keyin summa so‘raladi.
-"""
-    )
-
-    msg = bot.send_message(
-        message.chat.id,
-        f"💵 To‘lov summasini kiriting.\n\nMinimum: <b>{MIN_PAYMENT:,} so‘m</b>"
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        payment_amount
-    )
-
-
-def payment_amount(message):
-
-    try:
-
-        amount = int(
-            message.text.replace(" ", "").replace(",", "")
-        )
-
-    except:
-
-        msg = bot.send_message(
-            message.chat.id,
-            "❌ Faqat raqam kiriting.\n\nMasalan: 2000"
-        )
-
-        bot.register_next_step_handler(
-            msg,
-            payment_amount
-        )
-
-        return
-
-    if amount < MIN_PAYMENT:
-
-        msg = bot.send_message(
-            message.chat.id,
-            f"""
-❌ Minimal to‘lov <b>{MIN_PAYMENT:,} so‘m</b>.
-
-Qaytadan kiriting:
-"""
-        )
-
-        bot.register_next_step_handler(
-            msg,
-            payment_amount
-        )
-
-        return
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-💰 Summa: <b>{amount:,} so‘m</b>
-
-💳 Karta:
-<code>{CARD_NUMBER}</code>
-
-Endi to‘lovni amalga oshiring.
-
-📸 Keyin <b>chek rasmini yuboring</b>.
-"""
-    )
-
-    bot.register_next_step_handler(
-        bot.send_message(
-            message.chat.id,
-            "📸 <b>Chek rasmini yuboring:</b>"
-        ),
-        payment_receipt,
-        amount
-    )
-
-
-def payment_receipt(message, amount):
-
-    if not message.photo:
-
-        msg = bot.send_message(
-            message.chat.id,
-            "❌ Iltimos, chekni <b>rasm</b> ko‘rinishida yuboring."
-        )
-
-        bot.register_next_step_handler(
-            msg,
-            payment_receipt,
-            amount
-        )
-
-        return
-
-    photo_id = message.photo[-1].file_id
-
-    user = get_user(message.from_user.id)
-
-    username = user[1] if user else ""
-    phone = user[3] if user else ""
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO payments
-        (user_id, username, phone, amount, photo_id)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        message.from_user.id,
-        username,
-        phone,
-        amount,
-        photo_id
-    ))
-
-    payment_id = cur.lastrowid
-
-    conn.commit()
-    conn.close()
-
-    markup = types.InlineKeyboardMarkup()
-
-    markup.add(
-        types.InlineKeyboardButton(
-            "✅ Tasdiqlash",
-            callback_data=f"approve_{payment_id}"
-        ),
-        types.InlineKeyboardButton(
-            "❌ Rad etish",
-            callback_data=f"reject_{payment_id}"
-        )
-    )
-
-    admin_text = f"""
-💳 <b>YANGI TO‘LOV</b>
-
-🆔 To‘lov ID: <b>{payment_id}</b>
-
-👤 Ism: <b>{message.from_user.first_name}</b>
-🔹 Username: @{username if username else "yo‘q"}
-
-🆔 User ID: <code>{message.from_user.id}</code>
-
-📞 Telefon: <b>{phone if phone else "kiritilmagan"}</b>
-
-💰 Summa: <b>{amount:,} so‘m</b>
-
-⏳ Holat: <b>Kutilmoqda</b>
-"""
-
-    bot.send_photo(
-        ADMIN_ID,
-        photo_id,
-        caption=admin_text,
-        reply_markup=markup
-    )
-
-    bot.send_message(
-        message.chat.id,
-        """
-✅ <b>Chek adminga yuborildi.</b>
-
-⏳ Admin to‘lovni tekshiradi.
-
-Tasdiqlangandan keyin pul balansingizga qo‘shiladi.
-""",
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
-# PAYMENT CALLBACK
-# =========================================================
-
-@bot.callback_query_handler(
-    func=lambda call:
-    call.data.startswith("approve_") or
-    call.data.startswith("reject_")
-)
-def payment_callback(call):
-
-    if not is_admin(call.from_user.id):
-
-        bot.answer_callback_query(
-            call.id,
-            "❌ Siz admin emassiz.",
-            show_alert=True
-        )
-
-        return
-
-    try:
-
-        payment_id = int(
-            call.data.split("_")[1]
-        )
-
-    except:
-
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT user_id, amount, status
-        FROM payments
-        WHERE id = ?
-    """, (payment_id,))
-
-    payment = cur.fetchone()
-
-    if not payment:
-
-        conn.close()
-
-        bot.answer_callback_query(
-            call.id,
-            "❌ To‘lov topilmadi.",
-            show_alert=True
-        )
-
-        return
-
-    user_id, amount, status = payment
-
-    if status != "pending":
-
-        conn.close()
-
-        bot.answer_callback_query(
-            call.id,
-            "⚠️ Bu to‘lov allaqachon ko‘rib chiqilgan.",
-            show_alert=True
-        )
-
-        return
-
-    if call.data.startswith("approve_"):
-
-        cur.execute("""
-            UPDATE payments
-            SET status = 'approved'
-            WHERE id = ?
-        """, (payment_id,))
-
-        conn.commit()
-        conn.close()
-
-        change_balance(
-            user_id,
-            amount
-        )
-
-        new_balance = get_balance(user_id)
-
-        try:
-
-            bot.send_message(
-                user_id,
-                f"""
-✅ <b>To‘lov tasdiqlandi!</b>
-
-💰 Hisobingizga qo‘shildi:
-<b>+{amount:,} so‘m</b>
-
-💵 Yangi balans:
-<b>{new_balance:,} so‘m</b>
-"""
-            )
-
-        except:
-            pass
-
-        bot.answer_callback_query(
-            call.id,
-            "✅ To‘lov tasdiqlandi."
-        )
-
-        try:
-            bot.edit_message_caption(
-                f"""
-✅ <b>TO‘LOV TASDIQLANDI</b>
-
-🆔 To‘lov ID: <b>{payment_id}</b>
-💰 Summa: <b>{amount:,} so‘m</b>
-👤 User ID: <code>{user_id}</code>
-""",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-
-    else:
-
-        cur.execute("""
-            UPDATE payments
-            SET status = 'rejected'
-            WHERE id = ?
-        """, (payment_id,))
-
-        conn.commit()
-        conn.close()
-
-        try:
-
-            bot.send_message(
-                user_id,
-                f"""
-❌ <b>To‘lov rad etildi.</b>
-
-💰 Summa: <b>{amount:,} so‘m</b>
-
-Agar to‘lovni amalga oshirgan bo‘lsangiz,
-admin bilan bog‘laning.
-"""
-            )
-
-        except:
-            pass
-
-        bot.answer_callback_query(
-            call.id,
-            "❌ To‘lov rad etildi."
-        )
-
-        try:
-            bot.edit_message_caption(
-                f"""
-❌ <b>TO‘LOV RAD ETILDI</b>
-
-🆔 To‘lov ID: <b>{payment_id}</b>
-💰 Summa: <b>{amount:,} so‘m</b>
-👤 User ID: <code>{user_id}</code>
-""",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-
-
-# =========================================================
-# HELP
-# =========================================================
-
-@bot.message_handler(func=lambda message: message.text == "ℹ️ Yordam")
-def help_message(message):
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-ℹ️ <b>Yordam</b>
-
-🧾 QR Code yaratish — <b>{QR_PRICE} so‘m</b>
-
-💰 Hisobim — balansingizni ko‘rsatadi.
-
-➕ Hisobni to‘ldirish — karta orqali hisobni to‘ldirish.
-
-📞 Telefon raqamim — telefon raqamingizni saqlash.
-
-Minimal to‘lov: <b>{MIN_PAYMENT:,} so‘m</b>
-"""
-    )
-
-
-# =========================================================
-# ADMIN PANEL
-# =========================================================
+# ============================================================
+# QR CODE BOSHLASH
+# ============================================================
 
 @bot.message_handler(
     func=lambda message:
-    message.text == "⬅️ Oddiy menyu"
+    message.text == "🧾 QR Code yaratish"
 )
-def normal_menu(message):
-
-    bot.send_message(
-        message.chat.id,
-        "👤 Oddiy foydalanuvchi menyusi:",
-        reply_markup=main_menu()
-    )
-
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "👥 Foydalanuvchilar"
-)
-def admin_users(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM users
-    """)
-
-    count = cur.fetchone()[0]
-
-    conn.close()
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-👥 <b>Foydalanuvchilar</b>
-
-Jami foydalanuvchilar: <b>{count}</b>
-"""
-    )
-
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "📊 Statistika"
-)
-def admin_statistics(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM users
-    """)
-
-    users = cur.fetchone()[0]
-
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM payments
-        WHERE status = 'approved'
-    """)
-
-    payments = cur.fetchone()[0]
-
-    cur.execute("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM payments
-        WHERE status = 'approved'
-    """)
-
-    total_money = cur.fetchone()[0]
-
-    conn.close()
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-📊 <b>STATISTIKA</b>
-
-👥 Foydalanuvchilar: <b>{users}</b>
-
-💳 Tasdiqlangan to‘lovlar:
-<b>{payments}</b>
-
-💰 Jami tushum:
-<b>{total_money:,} so‘m</b>
-"""
-    )
-
-
-# =========================================================
-# ADMIN: PUL KIRITISH
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "💰 Hisobiga pul kiritish"
-)
-def admin_add_money(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        """
-💰 <b>Hisobiga pul kiritish</b>
-
-Foydalanuvchi Telegram ID sini kiriting:
-"""
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        admin_money_user
-    )
-
-
-def admin_money_user(message):
-
-    try:
-        user_id = int(message.text)
-    except:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-
-        return
-
-    user = get_user(user_id)
-
-    if not user:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Bunday foydalanuvchi topilmadi."
-        )
-
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        f"""
-👤 Foydalanuvchi:
-<code>{user_id}</code>
-
-💵 Qancha pul kiritilsin?
-"""
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        admin_money_amount,
-        user_id
-    )
-
-
-def admin_money_amount(message, user_id):
-
-    try:
-
-        amount = int(
-            message.text.replace(" ", "").replace(",", "")
-        )
-
-    except:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Summa noto‘g‘ri."
-        )
-
-        return
-
-    change_balance(
-        user_id,
-        amount
-    )
-
-    balance = get_balance(user_id)
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-✅ Hisob to‘ldirildi.
-
-👤 User ID: <code>{user_id}</code>
-
-💰 Qo‘shildi:
-<b>+{amount:,} so‘m</b>
-
-💵 Yangi balans:
-<b>{balance:,} so‘m</b>
-"""
-    )
-
-    try:
-
-        bot.send_message(
-            user_id,
-            f"""
-💰 <b>Hisobingiz admin tomonidan to‘ldirildi.</b>
-
-➕ Qo‘shildi: <b>{amount:,} so‘m</b>
-
-💵 Yangi balans: <b>{balance:,} so‘m</b>
-"""
-        )
-
-    except:
-        pass
-
-
-# =========================================================
-# ADMIN: BONUS
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "🎁 Bonus berish"
-)
-def admin_bonus(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        """
-🎁 <b>Bonus berish</b>
-
-Foydalanuvchi Telegram ID sini kiriting:
-"""
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        admin_bonus_user
-    )
-
-
-def admin_bonus_user(message):
-
-    try:
-
-        user_id = int(message.text)
-
-    except:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-
-        return
-
-    user = get_user(user_id)
-
-    if not user:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Foydalanuvchi topilmadi."
-        )
-
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        """
-🎁 Bonus summasini kiriting:
-
-Masalan:
-500
-1000
-5000
-"""
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        admin_bonus_amount,
-        user_id
-    )
-
-
-def admin_bonus_amount(message, user_id):
-
-    try:
-
-        amount = int(
-            message.text.replace(" ", "").replace(",", "")
-        )
-
-    except:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Summa noto‘g‘ri."
-        )
-
-        return
-
-    if amount <= 0:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Bonus 0 dan katta bo‘lishi kerak."
-        )
-
-        return
-
-    change_balance(
-        user_id,
-        amount
-    )
-
-    balance = get_balance(user_id)
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-🎁 <b>Bonus berildi!</b>
-
-👤 User ID:
-<code>{user_id}</code>
-
-➕ Bonus:
-<b>{amount:,} so‘m</b>
-
-💰 Yangi balans:
-<b>{balance:,} so‘m</b>
-"""
-    )
-
-    try:
-
-        bot.send_message(
-            user_id,
-            f"""
-🎁 <b>Sizga bonus berildi!</b>
-
-➕ Bonus:
-<b>{amount:,} so‘m</b>
-
-💰 Yangi balans:
-<b>{balance:,} so‘m</b>
-"""
-        )
-
-    except:
-        pass
-
-
-# =========================================================
-# ADMIN: TELEFON
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "📞 Telefon raqamini ko‘rish"
-)
-def admin_phone(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        """
-📞 Foydalanuvchi Telegram ID sini kiriting:
-"""
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        admin_phone_user
-    )
-
-
-def admin_phone_user(message):
-
-    try:
-
-        user_id = int(message.text)
-
-    except:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-
-        return
-
-    user = get_user(user_id)
-
-    if not user:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Foydalanuvchi topilmadi."
-        )
-
-        return
-
-    phone = user[3] or "Kiritilmagan"
-
-    bot.send_message(
-        message.chat.id,
-        f"""
-📞 <b>Foydalanuvchi ma’lumoti</b>
-
-🆔 ID:
-<code>{user_id}</code>
-
-👤 Ism:
-<b>{user[2]}</b>
-
-🔹 Username:
-@{user[1] if user[1] else "yo‘q"}
-
-📞 Telefon:
-<b>{phone}</b>
-
-💰 Balans:
-<b>{user[4]:,} so‘m</b>
-"""
-    )
-
-
-# =========================================================
-# ADMIN: TO‘LOVLAR
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "💳 To‘lovlar"
-)
-def admin_payments(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, user_id, amount, status, created_at
-        FROM payments
-        ORDER BY id DESC
-        LIMIT 20
-    """)
-
-    payments = cur.fetchall()
-
-    conn.close()
-
-    if not payments:
-
-        bot.send_message(
-            message.chat.id,
-            "💳 Hozircha to‘lovlar yo‘q."
-        )
-
-        return
-
-    text = "💳 <b>OXIRGI TO‘LOVLAR</b>\n\n"
-
-    for payment in payments:
-
-        payment_id, user_id, amount, status, created = payment
-
-        if status == "approved":
-            status_text = "✅"
-        elif status == "rejected":
-            status_text = "❌"
-        else:
-            status_text = "⏳"
-
-        text += (
-            f"{status_text} ID: <b>{payment_id}</b> | "
-            f"User: <code>{user_id}</code> | "
-            f"<b>{amount:,}</b> so‘m\n"
-        )
-
-    bot.send_message(
-        message.chat.id,
-        text
-    )
-
-
-# =========================================================
-# ADMIN: BLOCK
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "🚫 Bloklash"
-)
-def admin_block(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        "🚫 Bloklanadigan foydalanuvchi ID sini kiriting:"
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        block_user
-    )
-
-
-def block_user(message):
-
-    try:
-        user_id = int(message.text)
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE users
-        SET blocked = 1
-        WHERE user_id = ?
-    """, (user_id,))
-
-    conn.commit()
-    conn.close()
-
-    bot.send_message(
-        message.chat.id,
-        f"🚫 <code>{user_id}</code> bloklandi."
-    )
-
-
-# =========================================================
-# ADMIN: UNBLOCK
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message:
-    message.text == "✅ Blokdan chiqarish"
-)
-def admin_unblock(message):
-
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        "✅ Foydalanuvchi ID sini kiriting:"
-    )
-
-    bot.register_next_step_handler(
-        msg,
-        unblock_user
-    )
-
-
-def unblock_user(message):
-
-    try:
-        user_id = int(message.text)
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-        return
-
-    conn = db_connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE users
-        SET blocked = 0
-        WHERE user_id = ?
-    """, (user_id,))
-
-    conn.commit()
-    conn.close()
-
-    bot.send_message(
-        message.chat.id,
-        f"✅ <code>{user_id}</code> blokdan chiqarildi."
-    )
-
-
-# =========================================================
-# UNKNOWN MESSAGE
-# =========================================================
-
-@bot.message_handler(
-    func=lambda message: True,
-    content_types=["text"]
-)
-def unknown(message):
+def qr_start(message):
 
     add_user(message.from_user)
 
@@ -1499,33 +587,800 @@ def unknown(message):
 
         return
 
-    if is_admin(message.from_user.id):
+    balance = get_balance(
+        message.from_user.id
+    )
+
+    if balance < QR_PRICE:
 
         bot.send_message(
             message.chat.id,
-            "Menyudan kerakli bo‘limni tanlang 👇",
-            reply_markup=admin_menu()
+            f"""
+❌ <b>Balansingiz yetarli emas!</b>
+
+💰 Balans:
+<b>{balance:,} so‘m</b>
+
+🧾 QR narxi:
+<b>{QR_PRICE:,} so‘m</b>
+
+➕ Avval hisobingizni to‘ldiring.
+""",
+            reply_markup=user_menu()
         )
 
-    else:
+        return
 
-        bot.send_message(
-            message.chat.id,
-            "Menyudan kerakli bo‘limni tanlang 👇",
-            reply_markup=main_menu()
-        )
+    bot.send_message(
+        message.chat.id,
+        f"""
+🧾 <b>QR CODE YARATISH</b>
+
+💸 1 ta QR:
+<b>{QR_PRICE:,} so‘m</b>
+
+Kerakli QR turini tanlang 👇
+""",
+        reply_markup=qr_menu()
+    )
 
 
-# =========================================================
-# START BOT
-# =========================================================
+# ============================================================
+# ORQAGA
+# ============================================================
 
-print("===================================")
-print("       QR CODE BOT ISHLAMOQDA      ")
-print("===================================")
-
-bot.infinity_polling(
-    skip_pending=True,
-    timeout=60,
-    long_polling_timeout=60
+@bot.message_handler(
+    func=lambda message:
+    message.text == "⬅️ Orqaga"
 )
+def back_button(message):
+
+    bot.send_message(
+        message.chat.id,
+        "🏠 Asosiy menyu",
+        reply_markup=user_menu()
+    )
+
+
+# ============================================================
+# YORDAM
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message:
+    message.text == "ℹ️ Yordam"
+)
+def help_command(message):
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+ℹ️ <b>QR CODE BOT YORDAM</b>
+
+🧾 QR Code yaratish
+💰 Hisobim
+➕ Hisobni to‘ldirish
+📞 Telefon raqamini saqlash
+
+<b>QR narxi:</b>
+{QR_PRICE:,} so‘m
+
+<b>Hisob to‘ldirish minimumi:</b>
+{MIN_PAYMENT:,} so‘m
+"""
+    )
+
+
+# ============================================================
+# ADMIN TEKSHIRUVI
+# ============================================================
+
+def admin_only(message):
+
+    return message.from_user.id == ADMIN_ID
+
+
+# ============================================================
+# ADMIN / ODDIY MENYU
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message:
+    message.text == "⬅️ Oddiy menyu"
+)
+def normal_menu(message):
+
+    if not admin_only(message):
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "👤 Oddiy foydalanuvchi menyusi:",
+        reply_markup=user_menu()
+    )
+
+ # ============================================================
+# 2-QISM
+# ZAMONAVIY QR CODE GENERATOR
+# ============================================================
+
+
+# ============================================================
+# QR TURINI TANLASH
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("qr_")
+)
+def qr_type_selected(call):
+
+    user_id = call.from_user.id
+
+    # Foydalanuvchini tekshirish
+    add_user(call.from_user)
+
+    if is_blocked(user_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Siz bloklangansiz!",
+            show_alert=True
+        )
+
+        return
+
+    # Balansni tekshirish
+    balance = get_balance(user_id)
+
+    if balance < QR_PRICE:
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Balansingiz yetarli emas!",
+            show_alert=True
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            f"""
+❌ <b>QR yaratib bo‘lmaydi!</b>
+
+💰 Balansingiz:
+<b>{balance:,} so‘m</b>
+
+🧾 QR narxi:
+<b>{QR_PRICE:,} so‘m</b>
+
+➕ Avval hisobingizni to‘ldiring.
+"""
+        )
+
+        return
+
+    qr_type = call.data.replace(
+        "qr_",
+        ""
+    )
+
+    # ========================================================
+    # KO‘RSATMALAR
+    # ========================================================
+
+    instructions = {
+
+        "link": """
+🔗 <b>LINK QR CODE</b>
+
+Sayt yoki linkni yuboring.
+
+Masalan:
+
+https://google.com
+
+yoki:
+
+https://instagram.com
+""",
+
+        "text": """
+📝 <b>MATN QR CODE</b>
+
+QR ichiga yoziladigan matnni yuboring.
+
+Masalan:
+
+Assalomu alaykum!
+Bu mening QR kodim.
+""",
+
+        "phone": """
+📞 <b>TELEFON QR CODE</b>
+
+Telefon raqamini yuboring.
+
+Masalan:
+
++998901234567
+""",
+
+        "contact": """
+👤 <b>KONTAKT QR CODE</b>
+
+Quyidagi formatda yuboring:
+
+Ism | Telefon
+
+Masalan:
+
+Ismoil | +998901234567
+""",
+
+        "location": """
+📍 <b>LOKATSIYA QR CODE</b>
+
+Quyidagi formatda yuboring:
+
+Latitude, Longitude
+
+Masalan:
+
+41.3111, 69.2797
+""",
+
+        "wifi": """
+📶 <b>WI-FI QR CODE</b>
+
+Quyidagi formatda yuboring:
+
+SSID | PAROL | WPA
+
+Masalan:
+
+MyWifi | 12345678 | WPA
+
+Agar parol bo‘lmasa:
+
+MyWifi | | nopass
+""",
+
+        "payment": """
+💳 <b>TO‘LOV QR CODE</b>
+
+QR ichida ko‘rinadigan to‘lov ma’lumotini yuboring.
+
+Masalan:
+
+Karta: 8600123456789012
+Summa: 20000 so‘m
+""",
+
+        "telegram": """
+✈️ <b>TELEGRAM QR CODE</b>
+
+Username yoki Telegram linkni yuboring.
+
+Masalan:
+
+@username
+
+yoki:
+
+https://t.me/username
+""",
+
+        "email": """
+📧 <b>EMAIL QR CODE</b>
+
+Email manzilini yuboring.
+
+Masalan:
+
+example@gmail.com
+"""
+    }
+
+    text = instructions.get(
+        qr_type,
+        "📝 Ma’lumotni yuboring."
+    )
+
+    bot.answer_callback_query(
+        call.id
+    )
+
+    msg = bot.send_message(
+        call.message.chat.id,
+        text
+    )
+
+    # Keyingi xabarni kutish
+    bot.register_next_step_handler(
+        msg,
+        create_qr_code,
+        qr_type
+    )
+
+
+# ============================================================
+# QR YARATISH
+# ============================================================
+
+def create_qr_code(message, qr_type):
+
+    user_id = message.from_user.id
+
+    add_user(message.from_user)
+
+    # ========================================================
+    # BLOK TEKSHIRISH
+    # ========================================================
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz botdan foydalanishingiz bloklangan."
+        )
+
+        return
+
+    # ========================================================
+    # BALANS TEKSHIRISH
+    # ========================================================
+
+    balance = get_balance(user_id)
+
+    if balance < QR_PRICE:
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+❌ <b>Balans yetarli emas!</b>
+
+💰 Balans:
+<b>{balance:,} so‘m</b>
+
+🧾 QR narxi:
+<b>{QR_PRICE:,} so‘m</b>
+"""
+        )
+
+        return
+
+    # ========================================================
+    # MATNNI OLISH
+    # ========================================================
+
+    if not message.text:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ Ma’lumot topilmadi. Qaytadan urinib ko‘ring."
+        )
+
+        return
+
+    value = message.text.strip()
+
+    if not value:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ Bo‘sh ma’lumot yuborib bo‘lmaydi."
+        )
+
+        return
+
+    # ========================================================
+    # QR DATA
+    # ========================================================
+
+    try:
+
+        # ----------------------------------------------------
+        # LINK
+        # ----------------------------------------------------
+
+        if qr_type == "link":
+
+            if not value.startswith(
+                ("http://", "https://")
+            ):
+
+                value = "https://" + value
+
+            qr_data = value
+
+
+        # ----------------------------------------------------
+        # MATN
+        # ----------------------------------------------------
+
+        elif qr_type == "text":
+
+            qr_data = value
+
+
+        # ----------------------------------------------------
+        # TELEFON
+        # ----------------------------------------------------
+
+        elif qr_type == "phone":
+
+            phone = value.replace(
+                " ",
+                ""
+            )
+
+            qr_data = "tel:" + phone
+
+
+        # ----------------------------------------------------
+        # TELEGRAM
+        # ----------------------------------------------------
+
+        elif qr_type == "telegram":
+
+            if value.startswith(
+                "https://t.me/"
+            ):
+
+                qr_data = value
+
+            elif value.startswith(
+                "http://t.me/"
+            ):
+
+                qr_data = value
+
+            else:
+
+                username = value.replace(
+                    "@",
+                    ""
+                ).strip()
+
+                qr_data = (
+                    "https://t.me/"
+                    + username
+                )
+
+
+        # ----------------------------------------------------
+        # EMAIL
+        # ----------------------------------------------------
+
+        elif qr_type == "email":
+
+            qr_data = (
+                "mailto:"
+                + value
+            )
+
+
+        # ----------------------------------------------------
+        # LOKATSIYA
+        # ----------------------------------------------------
+
+        elif qr_type == "location":
+
+            parts = value.split(",")
+
+            if len(parts) != 2:
+
+                bot.send_message(
+                    message.chat.id,
+                    """
+❌ Format noto‘g‘ri.
+
+To‘g‘ri format:
+
+41.3111, 69.2797
+"""
+                )
+
+                return
+
+            latitude = parts[0].strip()
+            longitude = parts[1].strip()
+
+            qr_data = (
+                f"geo:{latitude},{longitude}"
+            )
+
+
+        # ----------------------------------------------------
+        # WI-FI
+        # ----------------------------------------------------
+
+        elif qr_type == "wifi":
+
+            parts = [
+                x.strip()
+                for x in value.split("|")
+            ]
+
+            if len(parts) != 3:
+
+                bot.send_message(
+                    message.chat.id,
+                    """
+❌ Format noto‘g‘ri.
+
+To‘g‘ri:
+
+SSID | PAROL | WPA
+
+Masalan:
+
+MyWifi | 12345678 | WPA
+"""
+                )
+
+                return
+
+            ssid = parts[0]
+            password = parts[1]
+            security = parts[2].upper()
+
+            # WiFi special belgilarini escape qilish
+            ssid = (
+                ssid
+                .replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace(":", "\\:")
+            )
+
+            password = (
+                password
+                .replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace(":", "\\:")
+            )
+
+            if security == "NOPASS":
+
+                qr_data = (
+                    f"WIFI:T:nopass;"
+                    f"S:{ssid};"
+                    f"P:;;"
+                )
+
+            else:
+
+                if security not in [
+                    "WPA",
+                    "WEP"
+                ]:
+
+                    security = "WPA"
+
+                qr_data = (
+                    f"WIFI:T:{security};"
+                    f"S:{ssid};"
+                    f"P:{password};;"
+                )
+
+
+        # ----------------------------------------------------
+        # KONTAKT
+        # ----------------------------------------------------
+
+        elif qr_type == "contact":
+
+            parts = value.split("|")
+
+            if len(parts) != 2:
+
+                bot.send_message(
+                    message.chat.id,
+                    """
+❌ Format noto‘g‘ri.
+
+To‘g‘ri:
+
+Ism | Telefon
+
+Masalan:
+
+Ismoil | +998901234567
+"""
+                )
+
+                return
+
+            name = parts[0].strip()
+            phone = parts[1].strip()
+
+            qr_data = f"""BEGIN:VCARD
+VERSION:3.0
+FN:{name}
+TEL:{phone}
+END:VCARD"""
+
+
+        # ----------------------------------------------------
+        # TO‘LOV
+        # ----------------------------------------------------
+
+        elif qr_type == "payment":
+
+            qr_data = value
+
+
+        # ----------------------------------------------------
+        # BOSHQA
+        # ----------------------------------------------------
+
+        else:
+
+            qr_data = value
+
+
+        # ====================================================
+        # QR CODE YARATISH
+        # ====================================================
+
+        qr = qrcode.QRCode(
+
+            version=None,
+
+            error_correction=(
+                qrcode.constants
+                .ERROR_CORRECT_H
+            ),
+
+            box_size=12,
+
+            border=4
+        )
+
+        qr.add_data(
+            qr_data
+        )
+
+        qr.make(
+            fit=True
+        )
+
+        image = qr.make_image(
+            fill_color="black",
+            back_color="white"
+        )
+
+
+        # ====================================================
+        # FAYL NOMI
+        # ====================================================
+
+        filename = (
+            f"qr_{user_id}_"
+            f"{message.message_id}.png"
+        )
+
+
+        # ====================================================
+        # RASMNI SAQLASH
+        # ====================================================
+
+        image.save(
+            filename
+        )
+
+
+        # ====================================================
+        # MUVAFFAQIYATLI YARATILDI
+        # ====================================================
+
+        # Faqat QR muvaffaqiyatli yaratilgandan
+        # keyin 300 so‘m yechiladi.
+
+        change_balance(
+            user_id,
+            -QR_PRICE,
+            reason="spent"
+        )
+
+
+        # Yangi balans
+        new_balance = get_balance(
+            user_id
+        )
+
+
+        # ====================================================
+        # QR NI YUBORISH
+        # ====================================================
+
+        with open(
+            filename,
+            "rb"
+        ) as photo:
+
+            bot.send_photo(
+
+                message.chat.id,
+
+                photo,
+
+                caption=f"""
+✅ <b>QR CODE TAYYOR!</b>
+
+🧾 QR turi:
+<b>{qr_type.upper()}</b>
+
+💸 Narxi:
+<b>{QR_PRICE:,} so‘m</b>
+
+💰 Qolgan balans:
+<b>{new_balance:,} so‘m</b>
+
+📱 Telefon kamerasi bilan skaner qilib tekshirishingiz mumkin.
+"""
+            )
+
+
+        # ====================================================
+        # FAYLNI O‘CHIRISH
+        # ====================================================
+
+        try:
+
+            os.remove(
+                filename
+            )
+
+        except:
+
+            pass
+
+
+    except Exception as error:
+
+        # ====================================================
+        # XATOLIK
+        # ====================================================
+
+        try:
+
+            if os.path.exists(
+                filename
+            ):
+
+                os.remove(
+                    filename
+                )
+
+        except:
+
+            pass
+
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+❌ <b>QR yaratishda xatolik!</b>
+
+Xatolik:
+<code>{error}</code>
+
+Qaytadan urinib ko‘ring.
+"""
+        )
+# ============================================================
+# BOTNI ISHGA TUSHIRISH
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("===================================")
+    print("       QR CODE PRO ISHLAMOQDA")
+    print("===================================")
+
+    bot.infinity_polling(
+        skip_pending=True,
+        timeout=60,
+        long_polling_timeout=60
+    )
