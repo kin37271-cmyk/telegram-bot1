@@ -17,9 +17,8 @@ import qrcode
 BOT_TOKEN = "8710077862:AAFeIzX2LR9yhxcD-TzqiFDIPFKGlW2XAxY"
 
 # O'zingizning Telegram ID'ingizni yozing
-ADMIN_IDS = {
-    7600986332
-}
+ADMIN_ID = 7600986332
+
 
 # Karta raqamingizni shu yerga yozing
 CARD_NUMBER = "6262 7201 2331 5395"
@@ -127,7 +126,7 @@ def init_db():
     """)
 
     # Dastlabki adminlar
-    for admin_id in ADMIN_IDS:
+    for admin_id in ADMIN_ID:
         cur.execute(
             "INSERT OR IGNORE INTO admins(user_id) VALUES(?)",
             (admin_id,)
@@ -277,7 +276,7 @@ def is_blocked(user_id):
 
 
 def is_admin(user_id):
-    if user_id in ADMIN_IDS:
+    if user_id in ADMIN_ID:
         return True
 
     conn = get_db()
@@ -1188,7 +1187,7 @@ def receipt_handler(message):
         )
     )
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in ADMIN_ID:
         try:
             if message.content_type == "photo":
                 bot.send_photo(
