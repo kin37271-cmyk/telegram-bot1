@@ -13,10 +13,10 @@ from telebot import types
 # SOZLAMALAR
 # ============================================================
 
-BOT_TOKEN = "BOT_TOKENINGIZNI_SHU_YERGA_YOZING"
+BOT_TOKEN = "8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI"
 
 # O'Z TELEGRAM IDINGIZNI YOZING
-ADMIN_ID = 123456789
+ADMIN_ID = 7600986332
 
 # 1 ta QR narxi
 QR_PRICE = 300
