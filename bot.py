@@ -14,7 +14,7 @@ import qrcode
 # SOZLAMALAR
 # =========================================================
 
-BOT_TOKEN = "8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI"
+BOT_TOKEN = "8710077862:AAFeIzX2LR9yhxcD-TzqiFDIPFKGlW2XAxY"
 
 # O'zingizning Telegram ID'ingizni yozing
 ADMIN_IDS = {
