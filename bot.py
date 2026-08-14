@@ -14,7 +14,7 @@ import qrcode
 # SOZLAMALAR
 # =========================================================
 
-BOT_TOKEN = os.getenv("8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI")
+BOT_TOKEN = "8633658106:AAFjNIzpm1jS30eNCxtzr8uaeM_xRVKsBzI"
 
 # O'zingizning Telegram ID'ingizni yozing
 ADMIN_IDS = {
