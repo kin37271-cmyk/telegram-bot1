@@ -1,282 +1,168 @@
+# ============================================================
+# QR CODE BOT — 1-QISM
+# /start | /id | /admin | ADMIN PANEL
+# ============================================================
+
 import os
-import io
 import sqlite3
-import hashlib
 import logging
-from datetime import datetime
+import time
 
 import telebot
 from telebot import types
-import qrcode
 
 
-# =========================================================
+# ============================================================
 # SOZLAMALAR
-# =========================================================
+# ============================================================
 
-BOT_TOKEN = "8710077862:AAFeIzX2LR9yhxcD-TzqiFDIPFKGlW2XAxY"
+BOT_TOKEN = "8819693468:AAGK2a8jqYfDtXQuis2fKesOHJMGfy2P238"
 
-# O'zingizning Telegram ID'ingizni yozing
+# O'ZINGIZNING TELEGRAM ID'ingizni yozing
 ADMIN_ID = 7600986332
 
-
-# Karta raqamingizni shu yerga yozing
-CARD_NUMBER = "6262 7201 2331 5395"
-
-# 1 ta QR narxi
-QR_PRICE = 150
-
-# Ma'lumotlar bazasi
 DB_NAME = "qr_bot.db"
+
+
+# ============================================================
+# BOT
+# ============================================================
+
+bot = telebot.TeleBot(
+    BOT_TOKEN,
+    parse_mode="HTML"
+)
+
+
+# ============================================================
+# LOG
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-
-# =========================================================
+# ============================================================
 # DATABASE
-# =========================================================
+# ============================================================
 
 def get_db():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn = sqlite3.connect(
+        DB_NAME,
+        check_same_thread=False
+    )
+
     conn.row_factory = sqlite3.Row
+
     return conn
 
 
 def init_db():
+
     conn = get_db()
     cur = conn.cursor()
 
+    # USERS
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE NOT NULL,
             username TEXT,
             first_name TEXT,
-            last_name TEXT,
-            phone TEXT DEFAULT '',
             balance INTEGER DEFAULT 0,
-            bonus INTEGER DEFAULT 0,
-            is_blocked INTEGER DEFAULT 0,
-            referred_by INTEGER DEFAULT NULL,
-            created_at TEXT
+            blocked INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            amount INTEGER,
-            receipt_file_id TEXT,
-            receipt_hash TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TEXT,
-            processed_at TEXT DEFAULT '',
-            admin_id INTEGER DEFAULT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            amount INTEGER,
-            type TEXT,
-            description TEXT,
-            created_at TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS qr_codes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            qr_type TEXT,
-            content TEXT,
-            price INTEGER,
-            created_at TEXT
-        )
-    """)
-
+    # ADMINS
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY
         )
     """)
 
+    # QR HISTORY
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS referrals (
+        CREATE TABLE IF NOT EXISTS qr_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            inviter_id INTEGER,
-            invited_id INTEGER,
-            bonus INTEGER,
-            created_at TEXT
+            user_id INTEGER,
+            qr_type TEXT,
+            data TEXT,
+            price INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Dastlabki adminlar
-    for admin_id in ADMIN_ID:
-        cur.execute(
-            "INSERT OR IGNORE INTO admins(user_id) VALUES(?)",
-            (admin_id,)
-        )
-
-    # Sozlamalar
-    default_settings = {
-        "qr_price": str(QR_PRICE),
-        "referral_bonus": "100",
-        "welcome_bonus": "0"
-    }
-
-    for key, value in default_settings.items():
-        cur.execute(
-            "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
-            (key, value)
-        )
+    # ASOSIY ADMINNI BAZAGA QO'SHISH
+    cur.execute(
+        "INSERT OR IGNORE INTO admins(user_id) VALUES(?)",
+        (ADMIN_ID,)
+    )
 
     conn.commit()
     conn.close()
 
-
-# =========================================================
-# SETTINGS
-# =========================================================
-
-def get_setting(key, default=None):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT value FROM settings WHERE key=?",
-        (key,)
+    logging.info(
+        "Database tayyor. ADMIN_ID=%s",
+        ADMIN_ID
     )
 
-    row = cur.fetchone()
-    conn.close()
 
-    if row:
-        return row["value"]
+# ============================================================
+# USER
+# ============================================================
 
-    return default
+def register_user(user):
 
-
-def set_setting(key, value):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO settings(key, value)
-        VALUES(?, ?)
-        ON CONFLICT(key)
-        DO UPDATE SET value=excluded.value
-    """, (key, str(value)))
+        INSERT OR IGNORE INTO users
+        (
+            user_id,
+            username,
+            first_name
+        )
+        VALUES (?, ?, ?)
+    """, (
+        user.id,
+        user.username or "",
+        user.first_name or ""
+    ))
 
     conn.commit()
-    conn.close()
-
-
-def get_qr_price():
-    try:
-        return int(get_setting("qr_price", QR_PRICE))
-    except:
-        return QR_PRICE
-
-
-# =========================================================
-# USER FUNCTIONS
-# =========================================================
-
-def register_user(user, referred_by=None):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT id FROM users WHERE id=?",
-        (user.id,)
-    )
-
-    exists = cur.fetchone()
-
-    if not exists:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        cur.execute("""
-            INSERT INTO users(
-                id,
-                username,
-                first_name,
-                last_name,
-                created_at,
-                referred_by
-            )
-            VALUES(?,?,?,?,?,?)
-        """, (
-            user.id,
-            user.username or "",
-            user.first_name or "",
-            user.last_name or "",
-            now,
-            referred_by
-        ))
-
-        conn.commit()
-
-    else:
-        cur.execute("""
-            UPDATE users
-            SET username=?,
-                first_name=?,
-                last_name=?
-            WHERE id=?
-        """, (
-            user.username or "",
-            user.first_name or "",
-            user.last_name or "",
-            user.id
-        ))
-
-        conn.commit()
-
     conn.close()
 
 
 def get_user(user_id):
+
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT * FROM users WHERE id=?",
+        "SELECT * FROM users WHERE user_id=?",
         (user_id,)
     )
 
     row = cur.fetchone()
+
     conn.close()
 
     return row
 
 
-def is_blocked(user_id):
-    user = get_user(user_id)
-
-    if not user:
-        return False
-
-    return bool(user["is_blocked"])
-
+# ============================================================
+# ADMIN TEKSHIRISH
+# ============================================================
 
 def is_admin(user_id):
-    if user_id in ADMIN_ID:
+
+    # ASOSIY ADMIN
+    if int(user_id) == int(ADMIN_ID):
         return True
 
     conn = get_db()
@@ -288,136 +174,650 @@ def is_admin(user_id):
     )
 
     row = cur.fetchone()
+
     conn.close()
 
-    return bool(row)
+    return row is not None
 
 
-# =========================================================
-# BALANCE
-# =========================================================
+# ============================================================
+# BLOCK TEKSHIRISH
+# ============================================================
 
-def add_balance(user_id, amount, description=""):
-    conn = get_db()
-    cur = conn.cursor()
+def is_blocked(user_id):
 
-    cur.execute("""
-        UPDATE users
-        SET balance = balance + ?
-        WHERE id=?
-    """, (amount, user_id))
-
-    cur.execute("""
-        INSERT INTO transactions(
-            user_id,
-            amount,
-            type,
-            description,
-            created_at
-        )
-        VALUES(?,?,?,?,?)
-    """, (
-        user_id,
-        amount,
-        "credit",
-        description,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def remove_balance(user_id, amount, description=""):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT balance FROM users WHERE id=?",
+        "SELECT blocked FROM users WHERE user_id=?",
         (user_id,)
     )
 
     row = cur.fetchone()
 
-    if not row or row["balance"] < amount:
-        conn.close()
-        return False
-
-    cur.execute("""
-        UPDATE users
-        SET balance = balance - ?
-        WHERE id=?
-    """, (amount, user_id))
-
-    cur.execute("""
-        INSERT INTO transactions(
-            user_id,
-            amount,
-            type,
-            description,
-            created_at
-        )
-        VALUES(?,?,?,?,?)
-    """, (
-        user_id,
-        -amount,
-        "debit",
-        description,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
-
-    conn.commit()
     conn.close()
 
-    return True
+    if not row:
+        return False
+
+    return bool(row["blocked"])
 
 
-# =========================================================
-# KEYBOARDS
-# =========================================================
+# ============================================================
+# USER MENU
+# ============================================================
 
-def main_menu():
+def main_menu(user_id):
+
     kb = types.ReplyKeyboardMarkup(
         resize_keyboard=True
     )
 
     kb.row(
         "📱 QR yaratish",
-        "💰 Hisobim"
-    )
-
-    kb.row(
-        "💳 Hisob to‘ldirish",
-        "🎁 Bonus"
+        "💳 Hisob"
     )
 
     kb.row(
         "📜 Tarix",
-        "🆘 Yordam"
+        "🎁 Bonus"
     )
 
     kb.row(
+        "🆘 Yordam",
         "ℹ️ Bot haqida"
+    )
+
+    # FAQAT ADMIN KO'RADI
+    if is_admin(user_id):
+        kb.row(
+            "👑 Admin panel"
+        )
+
+    return kb
+
+
+# ============================================================
+# ADMIN MENU
+# ============================================================
+
+def admin_menu():
+
+    kb = types.InlineKeyboardMarkup(
+        row_width=2
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "👥 Foydalanuvchilar",
+            callback_data="admin_users"
+        ),
+        types.InlineKeyboardButton(
+            "📊 Statistika",
+            callback_data="admin_stats"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "💰 To'lovlar",
+            callback_data="admin_payments"
+        ),
+        types.InlineKeyboardButton(
+            "➕ Pul qo'shish",
+            callback_data="admin_add_money"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "➖ Pul ayirish",
+            callback_data="admin_remove_money"
+        ),
+        types.InlineKeyboardButton(
+            "🚫 Bloklash",
+            callback_data="admin_block"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔓 Blokdan chiqarish",
+            callback_data="admin_unblock"
+        ),
+        types.InlineKeyboardButton(
+            "📢 Xabar yuborish",
+            callback_data="admin_broadcast"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "👑 Adminlar",
+            callback_data="admin_admins"
+        ),
+        types.InlineKeyboardButton(
+            "📜 QR tarixi",
+            callback_data="admin_qr_history"
+        )
     )
 
     return kb
 
 
-def qr_menu():
-    kb = types.InlineKeyboardMarkup()
+# ============================================================
+# START
+# ============================================================
 
-    kb.row(
+@bot.message_handler(commands=["start"])
+def start_command(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz botdan foydalanish uchun bloklangansiz."
+        )
+
+        return
+
+    text = (
+        "👋 <b>QR CODE BOT</b>\n\n"
+        "Assalomu alaykum!\n"
+        "QR kod yaratish botiga xush kelibsiz.\n\n"
+        f"🆔 ID: <code>{user_id}</code>\n\n"
+        "👇 Kerakli bo'limni tanlang:"
+    )
+
+    bot.send_message(
+        message.chat.id,
+        text,
+        reply_markup=main_menu(user_id)
+    )
+
+
+# ============================================================
+# /ID
+# ============================================================
+
+@bot.message_handler(commands=["id"])
+def id_command(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    bot.send_message(
+        message.chat.id,
+        "🆔 <b>SIZNING TELEGRAM ID INGIZ</b>\n\n"
+        f"<code>{user_id}</code>\n\n"
+        "👆 Shu ID'ni ADMIN_ID ga yozing."
+    )
+
+
+# ============================================================
+# /CHECKADMIN
+# ============================================================
+
+@bot.message_handler(commands=["checkadmin"])
+def check_admin(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_admin(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "✅ <b>SIZ ADMINSIZ!</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"👑 Asosiy admin: "
+            f"<b>{'HA' if user_id == ADMIN_ID else 'YO‘Q'}</b>"
+        )
+
+    else:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ <b>Siz admin emassiz.</b>\n\n"
+            f"🆔 Sizning ID: <code>{user_id}</code>\n"
+            f"🔐 Admin ID: <code>{ADMIN_ID}</code>"
+        )
+
+
+# ============================================================
+# /ADMIN
+# ============================================================
+
+@bot.message_handler(commands=["admin"])
+def admin_command(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    # ADMIN EMAS
+    if not is_admin(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 <b>RUXSAT YO'Q</b>\n\n"
+            f"🆔 Sizning ID: <code>{user_id}</code>\n\n"
+            "Siz admin sifatida ro'yxatdan o'tmagansiz."
+        )
+
+        return
+
+    # ADMIN
+    bot.send_message(
+        message.chat.id,
+        "👑 <b>ADMIN PANEL</b>\n\n"
+        f"🆔 Admin ID: <code>{user_id}</code>\n\n"
+        "Kerakli bo'limni tanlang:",
+        reply_markup=admin_menu()
+    )
+
+
+# ============================================================
+# ADMIN PANEL BUTTON
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message:
+    message.text == "👑 Admin panel"
+)
+def admin_panel_button(message):
+
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz admin emassiz."
+        )
+
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "👑 <b>ADMIN PANEL</b>\n\n"
+        f"🆔 ID: <code>{user_id}</code>\n\n"
+        "Kerakli bo'limni tanlang:",
+        reply_markup=admin_menu()
+    )
+
+
+# ============================================================
+# ADMIN CALLBACK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data.startswith("admin_")
+)
+def admin_callback(call):
+
+    user_id = call.from_user.id
+
+    # ENG MUHIM TEKSHIRUV
+    if not is_admin(user_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Siz admin emassiz!",
+            show_alert=True
+        )
+
+        return
+
+    data = call.data
+
+    bot.answer_callback_query(
+        call.id
+    )
+
+    # USERS
+    if data == "admin_users":
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT COUNT(*) AS count FROM users"
+        )
+
+        count = cur.fetchone()["count"]
+
+        conn.close()
+
+        bot.send_message(
+            call.message.chat.id,
+            "👥 <b>FOYDALANUVCHILAR</b>\n\n"
+            f"👤 Jami: <b>{count}</b>"
+        )
+
+    # STATS
+    elif data == "admin_stats":
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT COUNT(*) AS count FROM users"
+        )
+
+        users = cur.fetchone()["count"]
+
+        cur.execute(
+            "SELECT COUNT(*) AS count FROM qr_codes"
+        )
+
+        qrs = cur.fetchone()["count"]
+
+        conn.close()
+
+        bot.send_message(
+            call.message.chat.id,
+            "📊 <b>STATISTIKA</b>\n\n"
+            f"👥 Foydalanuvchilar: <b>{users}</b>\n"
+            f"📱 Yaratilgan QR: <b>{qrs}</b>"
+        )
+
+    # ADMINS
+    elif data == "admin_admins":
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT user_id FROM admins ORDER BY user_id"
+        )
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        text = "👑 <b>ADMINLAR</b>\n\n"
+
+        if not rows:
+
+            text += "Adminlar topilmadi."
+
+        else:
+
+            for row in rows:
+
+                admin_id = row["user_id"]
+
+                if admin_id == ADMIN_ID:
+
+                    text += (
+                        f"👑 <code>{admin_id}</code>"
+                        " — Asosiy admin\n"
+                    )
+
+                else:
+
+                    text += (
+                        f"🛡 <code>{admin_id}</code>\n"
+                    )
+
+        bot.send_message(
+            call.message.chat.id,
+            text
+        )
+
+    # QR HISTORY
+    elif data == "admin_qr_history":
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT *
+            FROM qr_codes
+            ORDER BY id DESC
+            LIMIT 30
+        """)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        if not rows:
+
+            bot.send_message(
+                call.message.chat.id,
+                "📜 QR tarixi hozircha bo'sh."
+            )
+
+        else:
+
+            text = "📜 <b>QR TARIXI</b>\n\n"
+
+            for row in rows:
+
+                text += (
+                    f"#{row['id']} | "
+                    f"🆔 <code>{row['user_id']}</code>\n"
+                    f"📱 Turi: <b>{row['qr_type']}</b>\n"
+                    f"💰 Narxi: "
+                    f"<b>{row['price']:,} so'm</b>\n"
+                    f"🕐 {row['created_at']}\n"
+                    "────────────\n"
+                )
+
+            bot.send_message(
+                call.message.chat.id,
+                text
+            )
+
+    # QOLGAN BO'LIMLAR
+    else:
+
+        bot.send_message(
+            call.message.chat.id,
+            "🚧 Bu bo'lim keyingi qismda ulanadi."
+        )
+
+
+# ============================================================
+# USER TEXT
+# ============================================================
+
+@bot.message_handler(content_types=["text"])
+def text_handler(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    text = message.text
+
+    if text == "📱 QR yaratish":
+
+        bot.send_message(
+            message.chat.id,
+            "📱 <b>QR yaratish</b>\n\n"
+            "Bu bo'lim 2-qismda ulanadi."
+        )
+
+        return
+
+    if text == "💳 Hisob":
+
+        user = get_user(user_id)
+
+        balance = user["balance"] if user else 0
+
+        bot.send_message(
+            message.chat.id,
+            "💳 <b>HISOB</b>\n\n"
+            f"💰 Balans: <b>{balance:,} so'm</b>"
+        )
+
+        return
+
+    if text == "📜 Tarix":
+
+        bot.send_message(
+            message.chat.id,
+            "📜 Sizning QR tarixingiz keyingi qismda."
+        )
+
+        return
+
+    if text == "🎁 Bonus":
+
+        bot.send_message(
+            message.chat.id,
+            "🎁 Bonus tizimi keyingi qismda."
+        )
+
+        return
+
+    if text == "🆘 Yordam":
+
+        bot.send_message(
+            message.chat.id,
+            "🆘 <b>YORDAM</b>\n\n"
+            "Savollar bo'lsa administratorga murojaat qiling."
+        )
+
+        return
+
+    if text == "ℹ️ Bot haqida":
+
+        bot.send_message(
+            message.chat.id,
+            "ℹ️ <b>QR CODE BOT</b>\n\n"
+            "Tez va qulay QR kod yaratish bot."
+        )
+
+        return
+
+
+# ============================================================
+# ERROR SAFE POLLING
+# ============================================================
+
+def start_bot():
+
+    while True:
+
+        try:
+
+            logging.info(
+                "Bot ishga tushmoqda..."
+            )
+
+            bot.remove_webhook()
+
+            time.sleep(1)
+
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=30,
+                long_polling_timeout=30,
+                allowed_updates=[
+                    "message",
+                    "callback_query"
+                ]
+            )
+
+        except Exception as e:
+
+            logging.exception(
+                "BOT ERROR: %s",
+                e
+            )
+
+            time.sleep(5)
+
+
+# ============================================================
+# START
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("=" * 60)
+    print("QR CODE BOT")
+    print("=" * 60)
+
+    print(
+        f"ADMIN ID: {ADMIN_ID}"
+    )
+
+    init_db()
+
+    print(
+        "ADMIN DATABASE'DA: OK"
+    )
+
+    print(
+        "BOT ISHGA TUSHMOQDA..."
+    )
+
+    # ============================================================
+# 2-QISM — QR CODE YARATISH
+# LINK / TEXT / PHONE / LOCATION / WIFI
+# ============================================================
+
+import io
+import qrcode
+
+
+# ============================================================
+# QR NARXI
+# ============================================================
+
+QR_PRICE = 150
+
+
+# ============================================================
+# QR HOLATLARI
+# ============================================================
+
+qr_states = {}
+
+
+# ============================================================
+# QR MENU
+# ============================================================
+
+def qr_menu():
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    kb.add(
         types.InlineKeyboardButton(
             "🔗 Link",
             callback_data="qr_link"
         ),
         types.InlineKeyboardButton(
-            "📝 Matn",
+            "📝 Text",
             callback_data="qr_text"
         )
     )
 
-    kb.row(
+    kb.add(
         types.InlineKeyboardButton(
             "📞 Telefon",
             callback_data="qr_phone"
@@ -428,613 +828,807 @@ def qr_menu():
         )
     )
 
-    kb.row(
+    kb.add(
         types.InlineKeyboardButton(
             "📶 Wi-Fi",
             callback_data="qr_wifi"
-        ),
-        types.InlineKeyboardButton(
-            "👤 Kontakt",
-            callback_data="qr_contact"
         )
     )
 
     return kb
 
 
-def admin_menu():
-    kb = types.InlineKeyboardMarkup(row_width=2)
+# ============================================================
+# QR YARATISH BUTTONINI ULASH
+# ============================================================
 
-    buttons = [
-        ("👥 Foydalanuvchilar", "admin_users"),
-        ("📊 Statistika", "admin_stats"),
-        ("💳 To‘lovlar", "admin_payments"),
-        ("🎁 Bonus berish", "admin_bonus"),
-        ("➕ Pul berish", "admin_add_money"),
-        ("➖ Pul ayirish", "admin_remove_money"),
-        ("🚫 Bloklash", "admin_block"),
-        ("🔓 Blokdan chiqarish", "admin_unblock"),
-        ("📢 Xabar yuborish", "admin_broadcast"),
-        ("⚙️ QR narxi", "admin_price"),
-        ("👑 Adminlar", "admin_admins"),
-        ("📜 QR tarixi", "admin_qr_history"),
-    ]
-
-    for text, data in buttons:
-        kb.add(
-            types.InlineKeyboardButton(
-                text,
-                callback_data=data
-            )
-        )
-
-    return kb
-
-
-# =========================================================
-# TEMP DATA
-# =========================================================
-
-user_states = {}
-
-
-# =========================================================
-# START
-# =========================================================
-
-@bot.message_handler(commands=["start"])
-def start(message):
-    try:
-        user = message.from_user
-
-        referred_by = None
-
-        args = message.text.split(maxsplit=1)
-
-        if len(args) > 1:
-            try:
-                ref_id = int(args[1])
-
-                if ref_id != user.id:
-                    referred_by = ref_id
-            except:
-                pass
-
-        already = get_user(user.id)
-
-        register_user(
-            user,
-            referred_by if not already else None
-        )
-
-        # Referral bonus
-        if not already and referred_by:
-            inviter = get_user(referred_by)
-
-            if inviter:
-                bonus = int(
-                    get_setting(
-                        "referral_bonus",
-                        "100"
-                    )
-                )
-
-                add_balance(
-                    referred_by,
-                    bonus,
-                    "Referral bonusi"
-                )
-
-                conn = get_db()
-                cur = conn.cursor()
-
-                cur.execute("""
-                    INSERT INTO referrals(
-                        inviter_id,
-                        invited_id,
-                        bonus,
-                        created_at
-                    )
-                    VALUES(?,?,?,?,?)
-                """, (
-                    referred_by,
-                    user.id,
-                    bonus,
-                    datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                ))
-
-                conn.commit()
-                conn.close()
-
-                try:
-                    bot.send_message(
-                        referred_by,
-                        f"🎁 Sizga referral bonusi berildi: "
-                        f"<b>{bonus:,} so‘m</b>"
-                    )
-                except:
-                    pass
-
-        if is_blocked(user.id):
-            bot.send_message(
-                message.chat.id,
-                "🚫 Siz botdan foydalanish huquqidan mahrum qilingansiz."
-            )
-            return
-
-        text = (
-            "👋 <b>QR Kod Yaratish Botiga xush kelibsiz!</b>\n\n"
-            "⚡ Tez va sifatli QR kod yarating.\n"
-            f"💰 1 ta QR kod: <b>{get_qr_price():,} so‘m</b>\n\n"
-            "Quyidagi menyudan foydalaning:"
-        )
-
-        bot.send_message(
-            message.chat.id,
-            text,
-            reply_markup=main_menu()
-        )
-
-    except Exception as e:
-        logging.exception(e)
-
-
-# =========================================================
-# CONTACT
-# =========================================================
-
-@bot.message_handler(content_types=["contact"])
-def receive_contact(message):
-    if is_blocked(message.from_user.id):
-        return
-
-    phone = message.contact.phone_number
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE users
-        SET phone=?
-        WHERE id=?
-    """, (
-        phone,
-        message.from_user.id
-    ))
-
-    conn.commit()
-    conn.close()
+def send_qr_menu(message):
 
     bot.send_message(
         message.chat.id,
-        "✅ Telefon raqamingiz saqlandi.",
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
-# TEXT MENU
-# =========================================================
-
-@bot.message_handler(
-    func=lambda m: m.text == "💰 Hisobim"
-)
-def account(message):
-    if is_blocked(message.from_user.id):
-        return
-
-    user = get_user(message.from_user.id)
-
-    bot.send_message(
-        message.chat.id,
-        "💰 <b>Hisobingiz</b>\n\n"
-        f"💵 Balans: <b>{user['balance']:,} so‘m</b>\n"
-        f"🎁 Bonus: <b>{user['bonus']:,} so‘m</b>\n"
-        f"📱 QR narxi: <b>{get_qr_price():,} so‘m</b>",
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
-# QR CREATE MENU
-# =========================================================
-
-@bot.message_handler(
-    func=lambda m: m.text == "📱 QR yaratish"
-)
-def create_qr(message):
-    if is_blocked(message.from_user.id):
-        return
-
-    user = get_user(message.from_user.id)
-
-    price = get_qr_price()
-
-    if user["balance"] < price:
-        bot.send_message(
-            message.chat.id,
-            "❌ Balansingiz yetarli emas.\n\n"
-            f"💰 Kerak: <b>{price:,} so‘m</b>\n"
-            f"💵 Balansingiz: <b>{user['balance']:,} so‘m</b>\n\n"
-            "Avval hisobingizni to‘ldiring."
-        )
-        return
-
-    bot.send_message(
-        message.chat.id,
-        "📱 <b>QR turini tanlang:</b>",
+        "📱 <b>QR KOD YARATISH</b>\n\n"
+        f"💰 Narxi: <b>{QR_PRICE:,} so'm</b>\n\n"
+        "QR kod turini tanlang:",
         reply_markup=qr_menu()
     )
 
 
-# =========================================================
+# ============================================================
 # QR CALLBACK
-# =========================================================
+# ============================================================
 
 @bot.callback_query_handler(
     func=lambda call: call.data.startswith("qr_")
 )
 def qr_callback(call):
+
     user_id = call.from_user.id
 
     if is_blocked(user_id):
+
         bot.answer_callback_query(
             call.id,
-            "🚫 Siz bloklangansiz."
+            "🚫 Siz bloklangansiz!",
+            show_alert=True
         )
+
         return
 
-    qr_type = call.data.replace("qr_", "")
+    data = call.data
 
-    user = get_user(user_id)
+    if data == "qr_link":
 
-    if user["balance"] < get_qr_price():
+        qr_states[user_id] = {
+            "type": "link"
+        }
+
         bot.answer_callback_query(
-            call.id,
-            "❌ Balans yetarli emas!"
+            call.id
         )
+
+        bot.send_message(
+            call.message.chat.id,
+            "🔗 <b>LINK QR</b>\n\n"
+            "Sayt yoki Telegram linkini yuboring.\n\n"
+            "Masalan:\n"
+            "<code>https://google.com</code>"
+        )
+
         return
 
-    user_states[user_id] = {
-        "action": "qr",
-        "type": qr_type
-    }
+    if data == "qr_text":
 
-    questions = {
-        "link": "🔗 QR ichiga joylashtiriladigan linkni yuboring:",
-        "text": "📝 QR ichiga yoziladigan matnni yuboring:",
-        "phone": "📞 Telefon raqamini yuboring:",
-        "location": "📍 Lokatsiyani <code>41.3111, 69.2797</code> ko‘rinishida yuboring:",
-        "wifi": (
-            "📶 Wi-Fi ma'lumotlarini quyidagi ko‘rinishda yuboring:\n\n"
-            "<code>SSID|PAROL|WPA</code>"
-        ),
-        "contact": (
-            "👤 Kontakt ma'lumotlarini yuboring:\n\n"
-            "<code>Ism|Telefon</code>"
+        qr_states[user_id] = {
+            "type": "text"
+        }
+
+        bot.answer_callback_query(
+            call.id
         )
-    }
 
-    bot.answer_callback_query(call.id)
-
-    bot.send_message(
-        call.message.chat.id,
-        questions.get(
-            qr_type,
-            "Ma'lumotni yuboring:"
+        bot.send_message(
+            call.message.chat.id,
+            "📝 <b>TEXT QR</b>\n\n"
+            "QR ichiga joylashtirmoqchi bo'lgan "
+            "matnni yuboring."
         )
-    )
+
+        return
+
+    if data == "qr_phone":
+
+        qr_states[user_id] = {
+            "type": "phone"
+        }
+
+        bot.answer_callback_query(
+            call.id
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "📞 <b>TELEFON QR</b>\n\n"
+            "Telefon raqamini yuboring.\n\n"
+            "Masalan:\n"
+            "<code>+998901234567</code>"
+        )
+
+        return
+
+    if data == "qr_location":
+
+        qr_states[user_id] = {
+            "type": "location"
+        }
+
+        bot.answer_callback_query(
+            call.id
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "📍 <b>LOKATSIYA QR</b>\n\n"
+            "Quyidagi formatda yuboring:\n\n"
+            "<code>41.311081,69.240562</code>\n\n"
+            "Birinchi raqam — latitude.\n"
+            "Ikkinchi raqam — longitude."
+        )
+
+        return
+
+    if data == "qr_wifi":
+
+        qr_states[user_id] = {
+            "type": "wifi",
+            "step": "ssid"
+        }
+
+        bot.answer_callback_query(
+            call.id
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "📶 <b>WI-FI QR</b>\n\n"
+            "Wi-Fi nomini (SSID) yuboring."
+        )
+
+        return
 
 
-# =========================================================
-# QR GENERATION
-# =========================================================
+# ============================================================
+# QR GENERATOR
+# ============================================================
 
-def generate_qr(data):
+def create_qr(data):
+
     qr = qrcode.QRCode(
         version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=12,
         border=4
     )
 
     qr.add_data(data)
-    qr.make(fit=True)
 
-    img = qr.make_image()
+    qr.make(
+        fit=True
+    )
 
-    bio = io.BytesIO()
-    bio.name = "qr_code.png"
+    image = qr.make_image(
+        fill_color="black",
+        back_color="white"
+    )
 
-    img.save(
-        bio,
+    output = io.BytesIO()
+
+    image.save(
+        output,
         format="PNG"
     )
 
-    bio.seek(0)
+    output.seek(0)
 
-    return bio
+    return output
 
 
-def build_qr_content(qr_type, text):
-    if qr_type == "link":
-        return text.strip()
+# ============================================================
+# QR SAQLASH
+# ============================================================
 
-    if qr_type == "text":
-        return text
+def save_qr(user_id, qr_type, data):
 
-    if qr_type == "phone":
-        return "tel:" + text.strip()
+    conn = get_db()
+    cur = conn.cursor()
 
-    if qr_type == "location":
-        parts = text.split(",")
-
-        if len(parts) != 2:
-            raise ValueError(
-                "Lokatsiya noto‘g‘ri formatda."
-            )
-
-        lat = parts[0].strip()
-        lon = parts[1].strip()
-
-        return f"geo:{lat},{lon}"
-
-    if qr_type == "wifi":
-        parts = text.split("|")
-
-        if len(parts) != 3:
-            raise ValueError(
-                "Wi-Fi formati noto‘g‘ri."
-            )
-
-        ssid = parts[0]
-        password = parts[1]
-        security = parts[2]
-
-        return (
-            f"WIFI:T:{security};"
-            f"S:{ssid};"
-            f"P:{password};;"
+    cur.execute("""
+        INSERT INTO qr_codes
+        (
+            user_id,
+            qr_type,
+            data,
+            price
         )
+        VALUES (?, ?, ?, ?)
+    """, (
+        user_id,
+        qr_type,
+        data,
+        QR_PRICE
+    ))
 
-    if qr_type == "contact":
-        parts = text.split("|")
-
-        if len(parts) != 2:
-            raise ValueError(
-                "Kontakt formati noto‘g‘ri."
-            )
-
-        name = parts[0]
-        phone = parts[1]
-
-        return (
-            "BEGIN:VCARD\n"
-            "VERSION:3.0\n"
-            f"FN:{name}\n"
-            f"TEL:{phone}\n"
-            "END:VCARD"
-        )
-
-    return text
+    conn.commit()
+    conn.close()
 
 
-# =========================================================
-# MESSAGE HANDLER
-# =========================================================
+# ============================================================
+# QR YUBORISH
+# ============================================================
 
-@bot.message_handler(
-    content_types=["text"]
-)
-def text_handler(message):
-    user_id = message.from_user.id
-
-    if is_blocked(user_id):
-        bot.send_message(
-            message.chat.id,
-            "🚫 Siz bloklangansiz."
-        )
-        return
-
-    register_user(message.from_user)
-
-    text = message.text
-
-    if text == "💳 Hisob to‘ldirish":
-        payment_start(message)
-        return
-
-    if text == "🎁 Bonus":
-        referral_info(message)
-        return
-
-    if text == "📜 Tarix":
-        history(message)
-        return
-
-    if text == "🆘 Yordam":
-        help_message(message)
-        return
-
-    if text == "ℹ️ Bot haqida":
-        about(message)
-        return
-
-    if text == "👑 Admin panel":
-        if is_admin(user_id):
-            bot.send_message(
-                message.chat.id,
-                "👑 <b>Admin panel</b>",
-                reply_markup=admin_menu()
-            )
-        return
-
-    state = user_states.get(user_id)
-
-    if state:
-        if state.get("action") == "qr":
-            handle_qr_data(message)
-            return
-
-        if state.get("action") == "payment_amount":
-            handle_payment_amount(message)
-            return
-
-        if state.get("action") == "admin_bonus":
-            admin_bonus_process(message)
-            return
-
-        if state.get("action") == "admin_add_money":
-            admin_add_money_process(message)
-            return
-
-        if state.get("action") == "admin_remove_money":
-            admin_remove_money_process(message)
-            return
-
-        if state.get("action") == "admin_block":
-            admin_block_process(message)
-            return
-
-        if state.get("action") == "admin_unblock":
-            admin_unblock_process(message)
-            return
-
-        if state.get("action") == "admin_broadcast":
-            admin_broadcast_process(message)
-            return
-
-        if state.get("action") == "admin_price":
-            admin_price_process(message)
-            return
-
-
-# =========================================================
-# QR DATA
-# =========================================================
-
-def handle_qr_data(message):
-    user_id = message.from_user.id
-    state = user_states.get(user_id)
-
-    if not state:
-        return
-
-    qr_type = state["type"]
+def send_generated_qr(message, qr_type, data):
 
     try:
-        content = build_qr_content(
+
+        image = create_qr(data)
+
+        save_qr(
+            message.from_user.id,
             qr_type,
-            message.text
+            data
         )
 
-        price = get_qr_price()
-
-        user = get_user(user_id)
-
-        if user["balance"] < price:
-            user_states.pop(user_id, None)
-
-            bot.send_message(
-                message.chat.id,
-                "❌ Balansingiz yetarli emas."
-            )
-            return
-
-        # Pulni yechish
-        success = remove_balance(
-            user_id,
-            price,
-            f"{qr_type} QR yaratildi"
+        caption = (
+            "✅ <b>QR KOD TAYYOR!</b>\n\n"
+            f"📱 Turi: <b>{qr_type}</b>\n"
+            f"💰 Narxi: <b>{QR_PRICE:,} so'm</b>\n\n"
+            "📷 QR kodni skaner qilishingiz mumkin."
         )
-
-        if not success:
-            user_states.pop(user_id, None)
-
-            bot.send_message(
-                message.chat.id,
-                "❌ Balansdan pul yechib bo‘lmadi."
-            )
-            return
-
-        # QR
-        image = generate_qr(content)
-
-        conn = get_db()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO qr_codes(
-                user_id,
-                qr_type,
-                content,
-                price,
-                created_at
-            )
-            VALUES(?,?,?,?,?)
-        """, (
-            user_id,
-            qr_type,
-            content,
-            price,
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        ))
-
-        conn.commit()
-        conn.close()
-
-        user_states.pop(user_id, None)
 
         bot.send_photo(
             message.chat.id,
             image,
-            caption=(
-                "✅ <b>QR kod tayyor!</b>\n\n"
-                f"💰 Narxi: <b>{price:,} so‘m</b>\n"
-                "📱 QR kodni telefon kamerasi orqali "
-                "skaner qilishingiz mumkin."
-            ),
-            reply_markup=main_menu()
+            caption=caption
         )
 
     except Exception as e:
-        logging.exception(e)
+
+        logging.exception(
+            "QR ERROR: %s",
+            e
+        )
 
         bot.send_message(
             message.chat.id,
-            f"❌ Ma'lumot noto‘g‘ri.\n\n"
-            f"<code>{e}</code>"
+            "❌ QR yaratishda xatolik yuz berdi."
         )
 
 
-# =========================================================
-# PAYMENT
-# =========================================================
+# ============================================================
+# QR TEXT HANDLER
+# ============================================================
 
-def payment_start(message):
-    user_states[message.from_user.id] = {
-        "action": "payment_amount"
-    }
+def process_qr_message(message):
+
+    user_id = message.from_user.id
+
+    state = qr_states.get(user_id)
+
+    if not state:
+        return False
+
+    qr_type = state.get("type")
+
+    text = message.text.strip()
+
+    # --------------------------------------------------------
+    # LINK
+    # --------------------------------------------------------
+
+    if qr_type == "link":
+
+        if not (
+            text.startswith("http://")
+            or text.startswith("https://")
+        ):
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Link noto'g'ri.\n\n"
+                "https:// bilan boshlanadigan link yuboring."
+            )
+
+            return True
+
+        send_generated_qr(
+            message,
+            "Link",
+            text
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # TEXT
+    # --------------------------------------------------------
+
+    if qr_type == "text":
+
+        if len(text) < 1:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Matn bo'sh bo'lmasligi kerak."
+            )
+
+            return True
+
+        send_generated_qr(
+            message,
+            "Text",
+            text
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # PHONE
+    # --------------------------------------------------------
+
+    if qr_type == "phone":
+
+        phone = text.replace(
+            " ",
+            ""
+        )
+
+        if not phone.startswith("+"):
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Telefon raqami + bilan boshlansin.\n\n"
+                "Masalan:\n"
+                "<code>+998901234567</code>"
+            )
+
+            return True
+
+        qr_data = "tel:" + phone
+
+        send_generated_qr(
+            message,
+            "Telefon",
+            qr_data
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # LOCATION
+    # --------------------------------------------------------
+
+    if qr_type == "location":
+
+        try:
+
+            parts = text.split(",")
+
+            if len(parts) != 2:
+                raise ValueError
+
+            latitude = float(
+                parts[0].strip()
+            )
+
+            longitude = float(
+                parts[1].strip()
+            )
+
+            if not (
+                -90 <= latitude <= 90
+            ):
+                raise ValueError
+
+            if not (
+                -180 <= longitude <= 180
+            ):
+                raise ValueError
+
+            qr_data = (
+                f"geo:{latitude},{longitude}"
+            )
+
+            send_generated_qr(
+                message,
+                "Lokatsiya",
+                qr_data
+            )
+
+            qr_states.pop(
+                user_id,
+                None
+            )
+
+        except Exception:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Lokatsiya noto'g'ri.\n\n"
+                "Masalan:\n"
+                "<code>41.311081,69.240562</code>"
+            )
+
+        return True
+
+    # --------------------------------------------------------
+    # WIFI
+    # --------------------------------------------------------
+
+    if qr_type == "wifi":
+
+        step = state.get("step")
+
+        # SSID
+        if step == "ssid":
+
+            qr_states[user_id]["ssid"] = text
+            qr_states[user_id]["step"] = "password"
+
+            bot.send_message(
+                message.chat.id,
+                "🔐 Wi-Fi parolini yuboring.\n\n"
+                "Agar parol bo'lmasa:\n"
+                "<code>none</code>"
+            )
+
+            return True
+
+        # PASSWORD
+        if step == "password":
+
+            qr_states[user_id]["password"] = text
+            qr_states[user_id]["step"] = "security"
+
+            kb = types.InlineKeyboardMarkup(
+                row_width=3
+            )
+
+            kb.add(
+                types.InlineKeyboardButton(
+                    "🔒 WPA/WPA2",
+                    callback_data="wifi_wpa"
+                ),
+                types.InlineKeyboardButton(
+                    "🔓 Ochiq",
+                    callback_data="wifi_none"
+                )
+            )
+
+            bot.send_message(
+                message.chat.id,
+                "🔐 <b>Wi-Fi himoyasi</b>\n\n"
+                "Himoya turini tanlang:",
+                reply_markup=kb
+            )
+
+            return True
+
+        return True
+
+    return False
+
+
+# ============================================================
+# WIFI SECURITY CALLBACK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data in [
+        "wifi_wpa",
+        "wifi_none"
+    ]
+)
+def wifi_security(call):
+
+    user_id = call.from_user.id
+
+    if user_id not in qr_states:
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Sessiya tugagan.",
+            show_alert=True
+        )
+
+        return
+
+    state = qr_states[user_id]
+
+    if state.get("type") != "wifi":
+
+        return
+
+    ssid = state.get(
+        "ssid",
+        ""
+    )
+
+    password = state.get(
+        "password",
+        ""
+    )
+
+    if call.data == "wifi_none":
+
+        security = "nopass"
+        password = ""
+
+    else:
+
+        security = "WPA"
+
+        if password.lower() == "none":
+            password = ""
+
+    # QR Wi-Fi format
+    qr_data = (
+        f"WIFI:"
+        f"T:{security};"
+        f"S:{ssid};"
+        f"P:{password};;"
+    )
+
+    bot.answer_callback_query(
+        call.id
+    )
+
+    # Fake message emas — to'g'ridan-to'g'ri yaratamiz
+    try:
+
+        image = create_qr(
+            qr_data
+        )
+
+        save_qr(
+            user_id,
+            "Wi-Fi",
+            qr_data
+        )
+
+        bot.send_photo(
+            call.message.chat.id,
+            image,
+            caption=(
+                "✅ <b>WI-FI QR TAYYOR!</b>\n\n"
+                f"📶 Wi-Fi: <b>{ssid}</b>\n"
+                f"🔐 Himoya: <b>{security}</b>\n\n"
+                "📷 Telefon kamerasi bilan skaner qiling."
+            )
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+    except Exception as e:
+
+        logging.exception(
+            "WIFI QR ERROR: %s",
+            e
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Wi-Fi QR yaratishda xatolik."
+        )
+
+
+# ============================================================
+# TEXT HANDLER ICHIGA QRNI ULASH
+# ============================================================
+
+    # ============================================================
+# 3-QISM — BALANS / PUL QO‘SHISH / QR UCHUN PUL YECHISH
+# ============================================================
+
+# ============================================================
+# BALANSNI OLISH
+# ============================================================
+
+def get_balance(user_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT balance FROM users WHERE user_id=?",
+        (user_id,)
+    )
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    if not row:
+        return 0
+
+    return int(row["balance"] or 0)
+
+
+# ============================================================
+# BALANSNI O‘ZGARTIRISH
+# ============================================================
+
+def change_balance(user_id, amount):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT balance FROM users WHERE user_id=?",
+        (user_id,)
+    )
+
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        return False
+
+    new_balance = int(row["balance"] or 0) + int(amount)
+
+    if new_balance < 0:
+        conn.close()
+        return False
+
+    cur.execute(
+        "UPDATE users SET balance=? WHERE user_id=?",
+        (new_balance, user_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return True
+
+
+# ============================================================
+# HISOB MENU
+# ============================================================
+
+def balance_menu():
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "💳 Hisob to‘ldirish",
+            callback_data="balance_add"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔄 Balansni yangilash",
+            callback_data="balance_refresh"
+        )
+    )
+
+    return kb
+
+
+# ============================================================
+# HISOBNI KO‘RSATISH
+# ============================================================
+
+def show_balance(message):
+
+    user_id = message.from_user.id
+
+    balance = get_balance(user_id)
 
     bot.send_message(
         message.chat.id,
-        "💳 <b>Hisob to‘ldirish</b>\n\n"
-        f"💳 Karta:\n<code>{CARD_NUMBER}</code>\n\n"
-        "1️⃣ Kartaga kerakli summani o'tkazing.\n"
-        "2️⃣ Qancha to‘lov qilganingizni yozing.\n"
-        "3️⃣ Keyin chekni yuboring.\n\n"
-        "💡 Masalan: <code>10000</code>"
+        "💳 <b>MENING HISOBIM</b>\n\n"
+        f"💰 Balans: <b>{balance:,} so‘m</b>\n\n"
+        f"📱 1 ta QR: <b>{QR_PRICE:,} so‘m</b>",
+        reply_markup=balance_menu()
     )
 
 
-def handle_payment_amount(message):
+# ============================================================
+# BALANCE CALLBACK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("balance_")
+)
+def balance_callback(call):
+
+    user_id = call.from_user.id
+
+    if is_blocked(user_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Siz bloklangansiz!",
+            show_alert=True
+        )
+
+        return
+
+    data = call.data
+
+    # --------------------------------------------------------
+    # REFRESH
+    # --------------------------------------------------------
+
+    if data == "balance_refresh":
+
+        balance = get_balance(user_id)
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ Balans yangilandi!"
+        )
+
+        bot.edit_message_text(
+            "💳 <b>MENING HISOBIM</b>\n\n"
+            f"💰 Balans: <b>{balance:,} so‘m</b>\n\n"
+            f"📱 1 ta QR: <b>{QR_PRICE:,} so‘m</b>",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=balance_menu()
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # ADD MONEY
+    # --------------------------------------------------------
+
+    if data == "balance_add":
+
+        bot.answer_callback_query(
+            call.id
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "💳 <b>HISOB TO‘LDIRISH</b>\n\n"
+            "Kerakli summani so‘mda yuboring.\n\n"
+            "Masalan:\n"
+            "<code>10000</code>"
+        )
+
+        payment_states[user_id] = {
+            "action": "amount"
+        }
+
+        return
+
+
+# ============================================================
+# PAYMENT STATES
+# ============================================================
+
+payment_states = {}
+
+
+# ============================================================
+# TO‘LOV SUMMASI
+# ============================================================
+
+def process_payment_amount(message):
+
     user_id = message.from_user.id
 
+    if user_id not in payment_states:
+        return False
+
+    state = payment_states[user_id]
+
+    if state.get("action") != "amount":
+        return False
+
     try:
+
         amount = int(
             message.text.replace(
                 " ",
@@ -1042,561 +1636,1365 @@ def handle_payment_amount(message):
             )
         )
 
-        if amount <= 0:
-            raise ValueError
+        if amount < 1000:
 
-        user_states[user_id] = {
-            "action": "payment_receipt",
-            "amount": amount
-        }
+            bot.send_message(
+                message.chat.id,
+                "❌ Minimal to‘lov <b>1 000 so‘m</b>."
+            )
+
+            return True
+
+    except ValueError:
 
         bot.send_message(
             message.chat.id,
-            "🧾 Endi to‘lov chekini <b>rasm</b> "
-            "yoki <b>fayl</b> ko‘rinishida yuboring."
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Summani faqat raqam bilan yozing.\n"
+            "❌ Faqat raqam yuboring.\n\n"
             "Masalan: <code>10000</code>"
         )
 
+        return True
 
-# =========================================================
-# RECEIPT PHOTO
-# =========================================================
+    payment_states.pop(
+        user_id,
+        None
+    )
+
+    # --------------------------------------------------------
+    # BU YERDA REAL KARTA TO‘LOVI ULASHILADI
+    # --------------------------------------------------------
+
+    bot.send_message(
+        message.chat.id,
+        "💳 <b>TO‘LOV MA’LUMOTI</b>\n\n"
+        f"💰 Summa: <b>{amount:,} so‘m</b>\n\n"
+        "🏦 Karta:\n"
+        "<code>6262 7201 2331 5395</code>\n\n"
+        "📸 To‘lovni amalga oshirgach, "
+        "chek rasmini shu yerga yuboring."
+    )
+
+    payment_states[user_id] = {
+        "action": "receipt",
+        "amount": amount
+    }
+
+    return True
+
+
+# ============================================================
+# CHEK QABUL QILISH
+# ============================================================
 
 @bot.message_handler(
-    content_types=["photo", "document"]
+    content_types=["photo"]
 )
-def receipt_handler(message):
+def payment_receipt(message):
+
     user_id = message.from_user.id
 
-    if is_blocked(user_id):
-        return
-
-    state = user_states.get(user_id)
+    state = payment_states.get(user_id)
 
     if not state:
         return
 
-    if state.get("action") != "payment_receipt":
+    if state.get("action") != "receipt":
         return
 
-    amount = state["amount"]
-
-    file_id = None
-
-    if message.content_type == "photo":
-        file_id = message.photo[-1].file_id
-
-    elif message.content_type == "document":
-        file_id = message.document.file_id
-
-    if not file_id:
-        return
-
-    unique_data = (
-        f"{user_id}|{amount}|{file_id}"
+    amount = int(
+        state.get("amount", 0)
     )
 
-    receipt_hash = hashlib.sha256(
-        unique_data.encode()
-    ).hexdigest()
+    photo = message.photo[-1]
 
-    conn = get_db()
-    cur = conn.cursor()
+    file_id = photo.file_id
 
-    # Bir xil receipt hash
-    cur.execute(
-        "SELECT id FROM payments WHERE receipt_hash=?",
-        (receipt_hash,)
-    )
-
-    exists = cur.fetchone()
-
-    if exists:
-        conn.close()
-
-        bot.send_message(
-            message.chat.id,
-            "⚠️ Bu chek allaqachon yuborilgan."
-        )
-        return
-
-    cur.execute("""
-        INSERT INTO payments(
-            user_id,
-            amount,
-            receipt_file_id,
-            receipt_hash,
-            status,
-            created_at
-        )
-        VALUES(?,?,?,?,?,?)
-    """, (
+    payment_states.pop(
         user_id,
-        amount,
-        file_id,
-        receipt_hash,
-        "pending",
-        datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
+        None
+    )
+
+    # --------------------------------------------------------
+    # ADMINLARGA CHEK YUBORISH
+    # --------------------------------------------------------
+
+    caption = (
+        "💳 <b>YANGI TO‘LOV</b>\n\n"
+        f"👤 User ID: <code>{user_id}</code>\n"
+        f"💰 Summa: <b>{amount:,} so‘m</b>\n\n"
+        "Tekshirib, balansga qo‘shing."
+    )
+
+    try:
+
+        bot.send_photo(
+            ADMIN_ID,
+            file_id,
+            caption=caption,
+            reply_markup=payment_admin_keyboard(
+                user_id,
+                amount
+            )
         )
-    ))
 
-    payment_id = cur.lastrowid
+    except Exception as e:
 
-    conn.commit()
-    conn.close()
-
-    user_states.pop(user_id, None)
+        logging.exception(
+            "ADMIN RECEIPT ERROR: %s",
+            e
+        )
 
     bot.send_message(
         message.chat.id,
-        "✅ Chekingiz adminga yuborildi.\n\n"
-        "⏳ Admin tekshirganidan keyin "
+        "✅ <b>Chek qabul qilindi!</b>\n\n"
+        f"💰 Summa: <b>{amount:,} so‘m</b>\n\n"
+        "👨‍💼 Admin tekshirganidan keyin "
         "balansingiz to‘ldiriladi."
     )
 
-    user = get_user(user_id)
 
-    admin_text = (
-        "💳 <b>Yangi to‘lov!</b>\n\n"
-        f"🆔 To‘lov: <code>#{payment_id}</code>\n"
-        f"👤 Ism: {user['first_name'] or '-'}\n"
-        f"🔹 Username: @{user['username'] if user['username'] else '-'}\n"
-        f"🆔 User ID: <code>{user_id}</code>\n"
-        f"📞 Telefon: <code>{user['phone'] or '-'}</code>\n"
-        f"💰 Summa: <b>{amount:,} so‘m</b>\n"
-        f"🕐 Sana: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+# ============================================================
+# ADMIN TO‘LOV TUGMALARI
+# ============================================================
 
-    keyboard = types.InlineKeyboardMarkup()
+def payment_admin_keyboard(user_id, amount):
 
-    keyboard.row(
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    kb.add(
         types.InlineKeyboardButton(
             "✅ Tasdiqlash",
-            callback_data=f"pay_accept:{payment_id}"
+            callback_data=f"pay_ok:{user_id}:{amount}"
         ),
         types.InlineKeyboardButton(
             "❌ Rad etish",
-            callback_data=f"pay_reject:{payment_id}"
+            callback_data=f"pay_no:{user_id}:{amount}"
         )
     )
 
-    for admin_id in ADMIN_ID:
-        try:
-            if message.content_type == "photo":
-                bot.send_photo(
-                    admin_id,
-                    file_id,
-                    caption=admin_text,
-                    reply_markup=keyboard
-                )
-            else:
-                bot.send_document(
-                    admin_id,
-                    file_id,
-                    caption=admin_text,
-                    reply_markup=keyboard
-                )
-        except Exception as e:
-            logging.exception(e)
+    return kb
 
 
-# =========================================================
-# PAYMENT CALLBACK
-# =========================================================
+# ============================================================
+# ADMIN PAYMENT CALLBACK
+# ============================================================
 
 @bot.callback_query_handler(
     func=lambda call:
-        call.data.startswith("pay_accept:")
-        or call.data.startswith("pay_reject:")
+    call.data.startswith("pay_")
 )
-def payment_callback(call):
-    if not is_admin(call.from_user.id):
-        bot.answer_callback_query(
-            call.id,
-            "🚫 Ruxsat yo‘q."
-        )
-        return
+def payment_admin_callback(call):
 
-    action, payment_id = call.data.split(":")
+    admin_id = call.from_user.id
 
-    payment_id = int(payment_id)
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT * FROM payments WHERE id=?",
-        (payment_id,)
-    )
-
-    payment = cur.fetchone()
-
-    if not payment:
-        conn.close()
+    if not is_admin(admin_id):
 
         bot.answer_callback_query(
             call.id,
-            "To‘lov topilmadi."
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
         )
+
         return
 
-    if payment["status"] != "pending":
-        conn.close()
+    parts = call.data.split(":")
+
+    if len(parts) != 3:
 
         bot.answer_callback_query(
             call.id,
-            "Bu to‘lov allaqachon ko‘rib chiqilgan."
+            "❌ Xato!",
+            show_alert=True
         )
+
         return
 
-    if action == "pay_accept":
-        cur.execute("""
-            UPDATE payments
-            SET status='approved',
-                processed_at=?,
-                admin_id=?
-            WHERE id=?
-        """, (
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            call.from_user.id,
-            payment_id
-        ))
+    action = parts[0]
+    user_id = int(parts[1])
+    amount = int(parts[2])
 
-        conn.commit()
-        conn.close()
+    # --------------------------------------------------------
+    # TASDIQLASH
+    # --------------------------------------------------------
 
-        add_balance(
-            payment["user_id"],
-            payment["amount"],
-            f"To‘lov #{payment_id} tasdiqlandi"
+    if action == "pay_ok":
+
+        success = change_balance(
+            user_id,
+            amount
         )
+
+        if not success:
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ Balansni o‘zgartirib bo‘lmadi!",
+                show_alert=True
+            )
+
+            return
+
+        new_balance = get_balance(
+            user_id
+        )
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ To‘lov tasdiqlandi!",
+            show_alert=True
+        )
+
+        try:
+
+            bot.send_message(
+                user_id,
+                "✅ <b>TO‘LOV TASDIQLANDI</b>\n\n"
+                f"💰 Qo‘shildi: <b>{amount:,} so‘m</b>\n"
+                f"💳 Yangi balans: "
+                f"<b>{new_balance:,} so‘m</b>"
+            )
+
+        except Exception:
+            pass
 
         bot.edit_message_caption(
             "✅ <b>TO‘LOV TASDIQLANDI</b>\n\n"
-            f"💰 {payment['amount']:,} so‘m\n"
-            f"👤 User ID: <code>{payment['user_id']}</code>\n"
-            f"👑 Admin: <code>{call.from_user.id}</code>",
+            f"👤 User ID: <code>{user_id}</code>\n"
+            f"💰 Summa: <b>{amount:,} so‘m</b>\n"
+            f"💳 Yangi balans: "
+            f"<b>{new_balance:,} so‘m</b>\n"
+            f"👑 Admin: <code>{admin_id}</code>",
             call.message.chat.id,
             call.message.message_id
         )
 
+        return
+
+    # --------------------------------------------------------
+    # RAD ETISH
+    # --------------------------------------------------------
+
+    if action == "pay_no":
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ To‘lov rad etildi.",
+            show_alert=True
+        )
+
         try:
-            user = get_user(payment["user_id"])
 
             bot.send_message(
-                payment["user_id"],
-                "✅ <b>To‘lov tasdiqlandi!</b>\n\n"
-                f"💰 Balansingizga "
-                f"<b>{payment['amount']:,} so‘m</b> qo‘shildi.\n"
-                f"💵 Joriy balans: "
-                f"<b>{user['balance']:,} so‘m</b>"
+                user_id,
+                "❌ <b>TO‘LOV RAD ETILDI</b>\n\n"
+                f"💰 Summa: <b>{amount:,} so‘m</b>\n\n"
+                "Chekni qayta tekshirib yuboring."
             )
-        except:
+
+        except Exception:
             pass
-
-    else:
-        cur.execute("""
-            UPDATE payments
-            SET status='rejected',
-                processed_at=?,
-                admin_id=?
-            WHERE id=?
-        """, (
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            call.from_user.id,
-            payment_id
-        ))
-
-        conn.commit()
-        conn.close()
 
         bot.edit_message_caption(
             "❌ <b>TO‘LOV RAD ETILDI</b>\n\n"
-            f"💰 {payment['amount']:,} so‘m\n"
-            f"👤 User ID: <code>{payment['user_id']}</code>",
+            f"👤 User ID: <code>{user_id}</code>\n"
+            f"💰 Summa: <b>{amount:,} so‘m</b>\n"
+            f"👑 Admin: <code>{admin_id}</code>",
             call.message.chat.id,
             call.message.message_id
         )
 
-        try:
-            bot.send_message(
-                payment["user_id"],
-                "❌ <b>To‘lovingiz rad etildi.</b>\n\n"
-                "Chekni tekshirib, qaytadan yuborishingiz mumkin."
-            )
-        except:
-            pass
+        return
+
+
+# ============================================================
+# ADMIN PUL QO‘SHISH
+# ============================================================
+
+admin_states = {}
+
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_add_money"
+)
+def admin_add_money_start(call):
+
+    if not is_admin(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
+        )
+
+        return
+
+    admin_states[call.from_user.id] = {
+        "action": "add_money"
+    }
 
     bot.answer_callback_query(
-        call.id,
-        "Tayyor."
-    )
-
-
-# =========================================================
-# REFERRAL
-# =========================================================
-
-def referral_info(message):
-    user_id = message.from_user.id
-
-    bot_username = bot.get_me().username
-
-    link = (
-        f"https://t.me/{bot_username}"
-        f"?start={user_id}"
-    )
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT COUNT(*) AS count
-        FROM referrals
-        WHERE inviter_id=?
-    """, (user_id,))
-
-    count = cur.fetchone()["count"]
-
-    conn.close()
-
-    bonus = get_setting(
-        "referral_bonus",
-        "100"
+        call.id
     )
 
     bot.send_message(
-        message.chat.id,
-        "🎁 <b>Referral tizimi</b>\n\n"
-        f"👥 Taklif qilganlaringiz: <b>{count}</b>\n"
-        f"💰 Har bir taklif uchun: <b>{int(bonus):,} so‘m</b>\n\n"
-        "🔗 Sizning havolangiz:\n"
-        f"<code>{link}</code>\n\n"
-        "Havolani do‘stlaringizga yuboring."
+        call.message.chat.id,
+        "➕ <b>PUL QO‘SHISH</b>\n\n"
+        "Quyidagi formatda yuboring:\n\n"
+        "<code>USER_ID SUMMA</code>\n\n"
+        "Masalan:\n"
+        "<code>123456789 10000</code>"
     )
 
 
-# =========================================================
-# HISTORY
-# =========================================================
+# ============================================================
+# ADMIN PUL AYIRISH
+# ============================================================
 
-def history(message):
-    user_id = message.from_user.id
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_remove_money"
+)
+def admin_remove_money_start(call):
+
+    if not is_admin(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
+        )
+
+        return
+
+    admin_states[call.from_user.id] = {
+        "action": "remove_money"
+    }
+
+    bot.answer_callback_query(
+        call.id
+    )
+
+    bot.send_message(
+        call.message.chat.id,
+        "➖ <b>PUL AYIRISH</b>\n\n"
+        "Quyidagi formatda yuboring:\n\n"
+        "<code>USER_ID SUMMA</code>\n\n"
+        "Masalan:\n"
+        "<code>123456789 5000</code>"
+    )
+
+
+# ============================================================
+# ADMIN PUL STATE
+# ============================================================
+
+def process_admin_money(message):
+
+    admin_id = message.from_user.id
+
+    state = admin_states.get(
+        admin_id
+    )
+
+    if not state:
+        return False
+
+    if not is_admin(admin_id):
+        return False
+
+    try:
+
+        parts = message.text.split()
+
+        if len(parts) != 2:
+            raise ValueError
+
+        target_user = int(
+            parts[0]
+        )
+
+        amount = int(
+            parts[1]
+        )
+
+        if amount <= 0:
+            raise ValueError
+
+    except Exception:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ Format noto‘g‘ri.\n\n"
+            "Masalan:\n"
+            "<code>123456789 10000</code>"
+        )
+
+        return True
+
+    user = get_user(
+        target_user
+    )
+
+    if not user:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ Bunday foydalanuvchi topilmadi."
+        )
+
+        return True
+
+    action = state.get(
+        "action"
+    )
+
+    if action == "add_money":
+
+        success = change_balance(
+            target_user,
+            amount
+        )
+
+        if success:
+
+            new_balance = get_balance(
+                target_user
+            )
+
+            bot.send_message(
+                message.chat.id,
+                "✅ <b>PUL QO‘SHILDI</b>\n\n"
+                f"👤 User: <code>{target_user}</code>\n"
+                f"➕ Summa: <b>{amount:,} so‘m</b>\n"
+                f"💳 Balans: <b>{new_balance:,} so‘m</b>"
+            )
+
+            try:
+
+                bot.send_message(
+                    target_user,
+                    "💰 <b>BALANSINGIZ TO‘LDIRILDI</b>\n\n"
+                    f"➕ Qo‘shildi: <b>{amount:,} so‘m</b>\n"
+                    f"💳 Balans: <b>{new_balance:,} so‘m</b>"
+                )
+
+            except Exception:
+                pass
+
+    elif action == "remove_money":
+
+        balance = get_balance(
+            target_user
+        )
+
+        if amount > balance:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Foydalanuvchining balansi "
+                "yetarli emas."
+            )
+
+            return True
+
+        success = change_balance(
+            target_user,
+            -amount
+        )
+
+        if success:
+
+            new_balance = get_balance(
+                target_user
+            )
+
+            bot.send_message(
+                message.chat.id,
+                "✅ <b>PUL AYIRILDI</b>\n\n"
+                f"👤 User: <code>{target_user}</code>\n"
+                f"➖ Summa: <b>{amount:,} so‘m</b>\n"
+                f"💳 Balans: <b>{new_balance:,} so‘m</b>"
+            )
+
+            try:
+
+                bot.send_message(
+                    target_user,
+                    "💸 <b>BALANSINGIZDAN PUL AYIRILDI</b>\n\n"
+                    f"➖ Ayirildi: <b>{amount:,} so‘m</b>\n"
+                    f"💳 Balans: <b>{new_balance:,} so‘m</b>"
+                )
+
+            except Exception:
+                pass
+
+    admin_states.pop(
+        admin_id,
+        None
+    )
+
+    return True
+
+# ============================================================
+# 4-QISM — ADMIN BOSHQARUVI
+# ============================================================
+
+# ============================================================
+# ADMINLAR RO‘YXATI
+# ============================================================
+
+def get_admins():
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT * FROM transactions
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 10
-    """, (user_id,))
+        SELECT user_id
+        FROM admins
+        ORDER BY user_id
+    """)
 
     rows = cur.fetchall()
 
     conn.close()
 
-    if not rows:
-        bot.send_message(
-            message.chat.id,
-            "📜 Hali tranzaksiyalar yo‘q."
+    return [int(row["user_id"]) for row in rows]
+
+
+# ============================================================
+# ADMIN QO‘SHISH
+# ============================================================
+
+def add_admin(user_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT OR IGNORE INTO admins(user_id) VALUES(?)",
+        (user_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# ADMIN O‘CHIRISH
+# ============================================================
+
+def remove_admin(user_id):
+
+    # ASOSIY ADMINNI O‘CHIRISHGA YO‘L QO‘YILMAYDI
+    if int(user_id) == int(ADMIN_ID):
+        return False
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "DELETE FROM admins WHERE user_id=?",
+        (user_id,)
+    )
+
+    deleted = cur.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return deleted
+
+
+# ============================================================
+# ADMINLAR MENYUSI
+# ============================================================
+
+def admins_menu():
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "➕ Admin qo‘shish",
+            callback_data="add_admin"
+        ),
+        types.InlineKeyboardButton(
+            "➖ Admin o‘chirish",
+            callback_data="remove_admin"
         )
-        return
+    )
 
-    text = "📜 <b>Oxirgi tranzaksiyalar</b>\n\n"
-
-    for row in rows:
-        amount = row["amount"]
-
-        if amount >= 0:
-            sign = "+"
-        else:
-            sign = ""
-
-        text += (
-            f"{sign}{amount:,} so‘m — "
-            f"{row['description']}\n"
-            f"🕐 {row['created_at']}\n\n"
+    kb.add(
+        types.InlineKeyboardButton(
+            "📋 Adminlar",
+            callback_data="list_admins"
         )
-
-    bot.send_message(
-        message.chat.id,
-        text
     )
 
-
-# =========================================================
-# HELP
-# =========================================================
-
-def help_message(message):
-    bot.send_message(
-        message.chat.id,
-        "🆘 <b>Yordam</b>\n\n"
-        "📱 QR yaratish — QR kod yaratish\n"
-        "💳 Hisob to‘ldirish — balansni to‘ldirish\n"
-        "💰 Hisobim — balansni ko‘rish\n"
-        "🎁 Bonus — referral bonus\n"
-        "📜 Tarix — tranzaksiyalar\n\n"
-        "Muammo bo‘lsa administratorga murojaat qiling."
-    )
-
-
-def about(message):
-    bot.send_message(
-        message.chat.id,
-        "ℹ️ <b>QR Kod Bot</b>\n\n"
-        "⚡ Tez QR kod yaratish xizmati.\n"
-        f"💰 1 QR: <b>{get_qr_price():,} so‘m</b>\n\n"
-        "🔐 To‘lovlar admin tomonidan tekshiriladi."
-    )
-
-
-# =========================================================
-# ADMIN PANEL
-# =========================================================
-
-@bot.message_handler(commands=["admin"])
-def admin_command(message):
-    if not is_admin(message.from_user.id):
-        bot.send_message(
-            message.chat.id,
-            "🚫 Ruxsat yo‘q."
+    kb.add(
+        types.InlineKeyboardButton(
+            "⬅️ Admin panel",
+            callback_data="back_admin"
         )
-        return
-
-    bot.send_message(
-        message.chat.id,
-        "👑 <b>Admin panel</b>",
-        reply_markup=admin_menu()
     )
 
+    return kb
+
+
+# ============================================================
+# BARCHA FOYDALANUVCHILAR
+# ============================================================
+
+def users_menu():
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "👥 Oxirgi foydalanuvchilar",
+            callback_data="users_list"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔎 User ID orqali",
+            callback_data="user_search"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "⬅️ Admin panel",
+            callback_data="back_admin"
+        )
+    )
+
+    return kb
+
+
+# ============================================================
+# ADMIN CALLBACK — 4-QISM
+# ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call:
-        call.data.startswith("admin_")
+    func=lambda call: call.data in [
+        "admin_admins",
+        "add_admin",
+        "remove_admin",
+        "list_admins",
+        "admin_users",
+        "users_list",
+        "user_search",
+        "back_admin"
+    ]
 )
-def admin_callback(call):
-    if not is_admin(call.from_user.id):
+def admin_management_callback(call):
+
+    admin_id = call.from_user.id
+
+    # FAQAT ADMIN
+    if not is_admin(admin_id):
+
         bot.answer_callback_query(
             call.id,
-            "🚫 Ruxsat yo‘q."
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
         )
+
         return
 
     data = call.data
 
-    if data == "admin_users":
-        admin_users(call)
-
-    elif data == "admin_stats":
-        admin_stats(call)
-
-    elif data == "admin_payments":
-        admin_payments(call)
-
-    elif data == "admin_bonus":
-        admin_input(call, "admin_bonus")
-
-    elif data == "admin_add_money":
-        admin_input(call, "admin_add_money")
-
-    elif data == "admin_remove_money":
-        admin_input(call, "admin_remove_money")
-
-    elif data == "admin_block":
-        admin_input(call, "admin_block")
-
-    elif data == "admin_unblock":
-        admin_input(call, "admin_unblock")
-
-    elif data == "admin_broadcast":
-        admin_input(call, "admin_broadcast")
-
-    elif data == "admin_price":
-        admin_input(call, "admin_price")
-
-    elif data == "admin_admins":
-        admin_admins(call)
-
-    elif data == "admin_qr_history":
-        admin_qr_history(call)
-
     bot.answer_callback_query(call.id)
 
+    # ========================================================
+    # ADMINLAR BO‘LIMI
+    # ========================================================
 
-# =========================================================
-# ADMIN USERS
-# =========================================================
+    if data == "admin_admins":
 
-def admin_users(call):
+        admins = get_admins()
+
+        text = (
+            "👑 <b>ADMINLAR BOSHQARUVI</b>\n\n"
+            f"👥 Jami adminlar: <b>{len(admins)}</b>\n\n"
+        )
+
+        for number, uid in enumerate(admins, 1):
+
+            if uid == ADMIN_ID:
+
+                text += (
+                    f"{number}. 👑 "
+                    f"<code>{uid}</code> — ASOSIY ADMIN\n"
+                )
+
+            else:
+
+                text += (
+                    f"{number}. 🛡 "
+                    f"<code>{uid}</code>\n"
+                )
+
+        bot.send_message(
+            call.message.chat.id,
+            text,
+            reply_markup=admins_menu()
+        )
+
+        return
+
+    # ========================================================
+    # ADMIN QO‘SHISH
+    # ========================================================
+
+    if data == "add_admin":
+
+        admin_states[admin_id] = {
+            "action": "add_admin"
+        }
+
+        bot.send_message(
+            call.message.chat.id,
+            "➕ <b>ADMIN QO‘SHISH</b>\n\n"
+            "Yangi adminning Telegram ID'sini yuboring.\n\n"
+            "Masalan:\n"
+            "<code>123456789</code>"
+        )
+
+        return
+
+    # ========================================================
+    # ADMIN O‘CHIRISH
+    # ========================================================
+
+    if data == "remove_admin":
+
+        admin_states[admin_id] = {
+            "action": "remove_admin"
+        }
+
+        bot.send_message(
+            call.message.chat.id,
+            "➖ <b>ADMIN O‘CHIRISH</b>\n\n"
+            "Adminning Telegram ID'sini yuboring.\n\n"
+            "Masalan:\n"
+            "<code>123456789</code>\n\n"
+            "⚠️ Asosiy admin o‘chirib bo‘lmaydi."
+        )
+
+        return
+
+    # ========================================================
+    # ADMINLAR RO‘YXATI
+    # ========================================================
+
+    if data == "list_admins":
+
+        admins = get_admins()
+
+        text = "📋 <b>ADMINLAR RO‘YXATI</b>\n\n"
+
+        for uid in admins:
+
+            if uid == ADMIN_ID:
+
+                text += (
+                    "👑 <code>"
+                    f"{uid}"
+                    "</code> — Asosiy admin\n"
+                )
+
+            else:
+
+                text += (
+                    "🛡 <code>"
+                    f"{uid}"
+                    "</code>\n"
+                )
+
+        bot.send_message(
+            call.message.chat.id,
+            text,
+            reply_markup=admins_menu()
+        )
+
+        return
+
+    # ========================================================
+    # FOYDALANUVCHILAR
+    # ========================================================
+
+    if data == "admin_users":
+
+        bot.send_message(
+            call.message.chat.id,
+            "👥 <b>FOYDALANUVCHILAR</b>\n\n"
+            "Kerakli bo‘limni tanlang:",
+            reply_markup=users_menu()
+        )
+
+        return
+
+    # ========================================================
+    # OXIRGI USERLAR
+    # ========================================================
+
+    if data == "users_list":
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                user_id,
+                username,
+                first_name,
+                balance,
+                blocked,
+                created_at
+            FROM users
+            ORDER BY id DESC
+            LIMIT 30
+        """)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        if not rows:
+
+            bot.send_message(
+                call.message.chat.id,
+                "👥 Hozircha foydalanuvchilar yo‘q."
+            )
+
+            return
+
+        text = "👥 <b>OXIRGI 30 FOYDALANUVCHI</b>\n\n"
+
+        for row in rows:
+
+            uid = row["user_id"]
+
+            username = row["username"]
+
+            name = row["first_name"] or "Noma’lum"
+
+            balance = row["balance"] or 0
+
+            blocked = row["blocked"]
+
+            status = "🚫 BLOK" if blocked else "🟢 Faol"
+
+            if username:
+
+                username_text = (
+                    f"@{username}"
+                )
+
+            else:
+
+                username_text = "username yo‘q"
+
+            text += (
+                f"👤 <b>{name}</b>\n"
+                f"🆔 <code>{uid}</code>\n"
+                f"🔗 {username_text}\n"
+                f"💰 {balance:,} so‘m\n"
+                f"{status}\n"
+                "──────────────\n"
+            )
+
+        bot.send_message(
+            call.message.chat.id,
+            text
+        )
+
+        return
+
+    # ========================================================
+    # USER QIDIRISH
+    # ========================================================
+
+    if data == "user_search":
+
+        admin_states[admin_id] = {
+            "action": "search_user"
+        }
+
+        bot.send_message(
+            call.message.chat.id,
+            "🔎 <b>USER QIDIRISH</b>\n\n"
+            "Telegram ID yuboring:\n\n"
+            "Masalan:\n"
+            "<code>123456789</code>"
+        )
+
+        return
+
+    # ========================================================
+    # ADMIN PANELGA QAYTISH
+    # ========================================================
+
+    if data == "back_admin":
+
+        bot.send_message(
+            call.message.chat.id,
+            "👑 <b>ADMIN PANEL</b>\n\n"
+            "Kerakli bo‘limni tanlang:",
+            reply_markup=admin_menu()
+        )
+
+        return
+
+
+# ============================================================
+# USERNI BLOKLASH
+# ============================================================
+
+def block_user(user_id):
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT * FROM users
-        ORDER BY id DESC
-        LIMIT 50
-    """)
-
-    users = cur.fetchall()
-
-    conn.close()
-
-    if not users:
-        bot.send_message(
-            call.message.chat.id,
-            "👥 Foydalanuvchilar yo‘q."
-        )
-        return
-
-    text = "👥 <b>Oxirgi 50 foydalanuvchi</b>\n\n"
-
-    for user in users:
-        status = (
-            "🚫"
-            if user["is_blocked"]
-            else "🟢"
-        )
-
-        username = (
-            f"@{user['username']}"
-            if user["username"]
-            else "-"
-        )
-
-        text += (
-            f"{status} <b>{user['first_name'] or '-'}</b>\n"
-            f"🆔 <code>{user['id']}</code>\n"
-            f"🔹 {username}\n"
-            f"📞 {user['phone'] or '-'}\n"
-            f"💰 {user['balance']:,} so‘m\n"
-            "────────────\n"
-        )
-
-    bot.send_message(
-        call.message.chat.id,
-        text
+    cur.execute(
+        "UPDATE users SET blocked=1 WHERE user_id=?",
+        (user_id,)
     )
 
+    changed = cur.rowcount > 0
 
-# =========================================================
-# ADMIN STATS
-# =========================================================
+    conn.commit()
+    conn.close()
 
-def admin_stats(call):
+    return changed
+
+
+# ============================================================
+# USERNI BLOKDAN CHIQARISH
+# ============================================================
+
+def unblock_user(user_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "UPDATE users SET blocked=0 WHERE user_id=?",
+        (user_id,)
+    )
+
+    changed = cur.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return changed
+
+
+# ============================================================
+# BLOK MENYUSI
+# ============================================================
+
+def block_menu():
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🚫 Bloklash",
+            callback_data="block_user"
+        ),
+        types.InlineKeyboardButton(
+            "🔓 Blokdan chiqarish",
+            callback_data="unblock_user"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "⬅️ Admin panel",
+            callback_data="back_admin"
+        )
+    )
+
+    return kb
+
+
+# ============================================================
+# BLOK CALLBACK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in [
+        "block_user",
+        "unblock_user"
+    ]
+)
+def block_callback(call):
+
+    admin_id = call.from_user.id
+
+    if not is_admin(admin_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
+        )
+
+        return
+
+    action = call.data
+
+    admin_states[admin_id] = {
+        "action": action
+    }
+
+    bot.answer_callback_query(call.id)
+
+    if action == "block_user":
+
+        bot.send_message(
+            call.message.chat.id,
+            "🚫 <b>USER BLOKLASH</b>\n\n"
+            "User ID yuboring:"
+        )
+
+    else:
+
+        bot.send_message(
+            call.message.chat.id,
+            "🔓 <b>USERNI BLOKDAN CHIQARISH</b>\n\n"
+            "User ID yuboring:"
+        )
+
+
+# ============================================================
+# ADMIN TEXT ACTIONS
+# ============================================================
+
+def process_admin_actions(message):
+
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        return False
+
+    state = admin_states.get(admin_id)
+
+    if not state:
+        return False
+
+    action = state.get("action")
+
+    # ========================================================
+    # ADMIN QO‘SHISH
+    # ========================================================
+
+    if action == "add_admin":
+
+        try:
+            new_admin = int(
+                message.text.strip()
+            )
+        except ValueError:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Faqat Telegram ID yuboring."
+            )
+
+            return True
+
+        add_admin(new_admin)
+
+        admin_states.pop(
+            admin_id,
+            None
+        )
+
+        bot.send_message(
+            message.chat.id,
+            "✅ <b>ADMIN QO‘SHILDI</b>\n\n"
+            f"🆔 ID: <code>{new_admin}</code>"
+        )
+
+        try:
+
+            bot.send_message(
+                new_admin,
+                "👑 Siz botga admin sifatida qo‘shildingiz."
+            )
+
+        except Exception:
+            pass
+
+        return True
+
+    # ========================================================
+    # ADMIN O‘CHIRISH
+    # ========================================================
+
+    if action == "remove_admin":
+
+        try:
+            old_admin = int(
+                message.text.strip()
+            )
+        except ValueError:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Faqat Telegram ID yuboring."
+            )
+
+            return True
+
+        if old_admin == ADMIN_ID:
+
+            bot.send_message(
+                message.chat.id,
+                "🚫 Asosiy adminni o‘chirib bo‘lmaydi."
+            )
+
+            admin_states.pop(
+                admin_id,
+                None
+            )
+
+            return True
+
+        success = remove_admin(
+            old_admin
+        )
+
+        admin_states.pop(
+            admin_id,
+            None
+        )
+
+        if success:
+
+            bot.send_message(
+                message.chat.id,
+                "✅ <b>ADMIN O‘CHIRILDI</b>\n\n"
+                f"🆔 ID: <code>{old_admin}</code>"
+            )
+
+        else:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Bu ID admin emas."
+            )
+
+        return True
+
+    # ========================================================
+    # USER SEARCH
+    # ========================================================
+
+    if action == "search_user":
+
+        try:
+            target_id = int(
+                message.text.strip()
+            )
+        except ValueError:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ To‘g‘ri Telegram ID yuboring."
+            )
+
+            return True
+
+        user = get_user(
+            target_id
+        )
+
+        admin_states.pop(
+            admin_id,
+            None
+        )
+
+        if not user:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Foydalanuvchi topilmadi."
+            )
+
+            return True
+
+        username = user["username"]
+
+        username_text = (
+            f"@{username}"
+            if username
+            else "username yo‘q"
+        )
+
+        status = (
+            "🚫 BLOKLANGAN"
+            if user["blocked"]
+            else "🟢 FAOL"
+        )
+
+        bot.send_message(
+            message.chat.id,
+            "👤 <b>FOYDALANUVCHI</b>\n\n"
+            f"🆔 ID: <code>{user['user_id']}</code>\n"
+            f"👤 Ism: <b>{user['first_name']}</b>\n"
+            f"🔗 Username: {username_text}\n"
+            f"💰 Balans: <b>{user['balance']:,} so‘m</b>\n"
+            f"📅 Ro‘yxatdan o‘tgan: "
+            f"<b>{user['created_at']}</b>\n\n"
+            f"Holat: {status}"
+        )
+
+        return True
+
+    # ========================================================
+    # BLOCK
+    # ========================================================
+
+    if action == "block_user":
+
+        try:
+            target_id = int(
+                message.text.strip()
+            )
+        except ValueError:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ To‘g‘ri Telegram ID yuboring."
+            )
+
+            return True
+
+        if target_id == ADMIN_ID:
+
+            bot.send_message(
+                message.chat.id,
+                "🚫 Asosiy adminni bloklab bo‘lmaydi."
+            )
+
+            admin_states.pop(
+                admin_id,
+                None
+            )
+
+            return True
+
+        success = block_user(
+            target_id
+        )
+
+        admin_states.pop(
+            admin_id,
+            None
+        )
+
+        if success:
+
+            bot.send_message(
+                message.chat.id,
+                "🚫 <b>USER BLOKLANDI</b>\n\n"
+                f"🆔 ID: <code>{target_id}</code>"
+            )
+
+            try:
+
+                bot.send_message(
+                    target_id,
+                    "🚫 Siz bot tomonidan bloklandingiz."
+                )
+
+            except Exception:
+                pass
+
+        else:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Foydalanuvchi topilmadi."
+            )
+
+        return True
+
+    # ========================================================
+    # UNBLOCK
+    # ========================================================
+
+    if action == "unblock_user":
+
+        try:
+            target_id = int(
+                message.text.strip()
+            )
+        except ValueError:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ To‘g‘ri Telegram ID yuboring."
+            )
+
+            return True
+
+        success = unblock_user(
+            target_id
+        )
+
+        admin_states.pop(
+            admin_id,
+            None
+        )
+
+        if success:
+
+            bot.send_message(
+                message.chat.id,
+                "🔓 <b>USER BLOKDAN CHIQARILDI</b>\n\n"
+                f"🆔 ID: <code>{target_id}</code>"
+            )
+
+            try:
+
+                bot.send_message(
+                    target_id,
+                    "✅ Siz bot blokidan chiqarildingiz."
+                )
+
+            except Exception:
+                pass
+
+        else:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Foydalanuvchi topilmadi."
+            )
+
+        return True
+
+    return False
+# ============================================================
+# 5-QISM — STATISTIKA / BROADCAST / QR NARXI
+# ============================================================
+
+
+# ============================================================
+# ADMIN STATISTIKA
+# ============================================================
+
+def get_statistics():
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -1606,510 +3004,893 @@ def admin_stats(call):
     users = cur.fetchone()["count"]
 
     cur.execute(
-        "SELECT COUNT(*) AS count FROM users WHERE is_blocked=1"
+        "SELECT COUNT(*) AS count FROM users WHERE blocked=1"
     )
     blocked = cur.fetchone()["count"]
 
     cur.execute(
+        "SELECT COUNT(*) AS count FROM admins"
+    )
+    admins = cur.fetchone()["count"]
+
+    cur.execute(
         "SELECT COUNT(*) AS count FROM qr_codes"
     )
-    qr_count = cur.fetchone()["count"]
+    qrs = cur.fetchone()["count"]
 
-    cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS total
-        FROM payments
-        WHERE status='approved'
-    """)
+    cur.execute(
+        "SELECT COALESCE(SUM(balance),0) AS total FROM users"
+    )
+    balance = cur.fetchone()["total"]
 
-    income = cur.fetchone()["total"]
-
-    cur.execute("""
-        SELECT COUNT(*) AS count
-        FROM payments
-        WHERE status='pending'
-    """)
-
-    pending = cur.fetchone()["count"]
+    cur.execute(
+        "SELECT COALESCE(SUM(price),0) AS total FROM qr_codes"
+    )
+    qr_income = cur.fetchone()["total"]
 
     conn.close()
+
+    return {
+        "users": users,
+        "blocked": blocked,
+        "admins": admins,
+        "qrs": qrs,
+        "balance": balance,
+        "qr_income": qr_income
+    }
+
+
+# ============================================================
+# STATISTIKA
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_stats"
+)
+def statistics_callback(call):
+
+    if not is_admin(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
+        )
+
+        return
+
+    stats = get_statistics()
+
+    bot.answer_callback_query(
+        call.id
+    )
 
     text = (
-        "📊 <b>STATISTIKA</b>\n\n"
-        f"👥 Jami foydalanuvchilar: <b>{users}</b>\n"
-        f"🚫 Bloklanganlar: <b>{blocked}</b>\n"
-        f"📱 Jami QR: <b>{qr_count}</b>\n"
-        f"💰 Tasdiqlangan tushum: <b>{income:,} so‘m</b>\n"
-        f"⏳ Kutilayotgan to‘lovlar: <b>{pending}</b>"
+        "📊 <b>BOT STATISTIKASI</b>\n\n"
+        f"👥 Foydalanuvchilar: "
+        f"<b>{stats['users']}</b>\n"
+        f"🚫 Bloklanganlar: "
+        f"<b>{stats['blocked']}</b>\n"
+        f"👑 Adminlar: "
+        f"<b>{stats['admins']}</b>\n"
+        f"📱 Yaratilgan QR: "
+        f"<b>{stats['qrs']}</b>\n\n"
+        f"💳 Foydalanuvchilar balanslari jami: "
+        f"<b>{stats['balance']:,} so‘m</b>\n"
+        f"📈 QR tushumi: "
+        f"<b>{stats['qr_income']:,} so‘m</b>\n\n"
+        f"💰 Hozirgi QR narxi: "
+        f"<b>{QR_PRICE:,} so‘m</b>"
+    )
+
+    kb = types.InlineKeyboardMarkup()
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔄 Yangilash",
+            callback_data="admin_stats"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "⬅️ Admin panel",
+            callback_data="back_admin"
+        )
     )
 
     bot.send_message(
         call.message.chat.id,
-        text
+        text,
+        reply_markup=kb
     )
 
 
-# =========================================================
-# ADMIN PAYMENTS
-# =========================================================
+# ============================================================
+# QR NARXINI O‘ZGARTIRISH
+# ============================================================
 
-def admin_payments(call):
-    conn = get_db()
-    cur = conn.cursor()
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_qr_price"
+)
+def qr_price_start(call):
 
-    cur.execute("""
-        SELECT * FROM payments
-        ORDER BY id DESC
-        LIMIT 20
-    """)
+    if not is_admin(call.from_user.id):
 
-    rows = cur.fetchall()
-
-    conn.close()
-
-    if not rows:
-        bot.send_message(
-            call.message.chat.id,
-            "💳 To‘lovlar yo‘q."
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
         )
+
         return
 
-    text = "💳 <b>To‘lovlar</b>\n\n"
-
-    for row in rows:
-        status_map = {
-            "pending": "⏳",
-            "approved": "✅",
-            "rejected": "❌"
-        }
-
-        status = status_map.get(
-            row["status"],
-            "❓"
-        )
-
-        text += (
-            f"{status} #{row['id']} — "
-            f"<b>{row['amount']:,} so‘m</b>\n"
-            f"👤 <code>{row['user_id']}</code>\n"
-            f"🕐 {row['created_at']}\n\n"
-        )
-
-    bot.send_message(
-        call.message.chat.id,
-        text
-    )
-
-
-# =========================================================
-# ADMIN INPUT
-# =========================================================
-
-def admin_input(call, action):
-    user_states[call.from_user.id] = {
-        "action": action
+    admin_states[call.from_user.id] = {
+        "action": "change_qr_price"
     }
 
-    instructions = {
-        "admin_bonus":
-            "🎁 Foydalanuvchi ID va bonus summasini yuboring.\n"
-            "<code>ID SUMMA</code>\n\n"
-            "Masalan: <code>123456789 500</code>",
-
-        "admin_add_money":
-            "➕ Foydalanuvchi ID va summani yuboring.\n"
-            "<code>ID SUMMA</code>",
-
-        "admin_remove_money":
-            "➖ Foydalanuvchi ID va summani yuboring.\n"
-            "<code>ID SUMMA</code>",
-
-        "admin_block":
-            "🚫 Bloklanadigan foydalanuvchi ID'sini yuboring.",
-
-        "admin_unblock":
-            "🔓 Blokdan chiqariladigan ID'ni yuboring.",
-
-        "admin_broadcast":
-            "📢 Barcha foydalanuvchilarga yuboriladigan xabarni yozing.",
-
-        "admin_price":
-            "💰 Yangi QR narxini yuboring.\n"
-            "Masalan: <code>150</code>"
-    }
+    bot.answer_callback_query(
+        call.id
+    )
 
     bot.send_message(
         call.message.chat.id,
-        instructions[action]
+        "💰 <b>QR NARXINI O‘ZGARTIRISH</b>\n\n"
+        "Yangi narxni so‘mda yuboring.\n\n"
+        "Masalan:\n"
+        "<code>500</code>"
     )
 
 
-# =========================================================
-# ADMIN BONUS
-# =========================================================
+# ============================================================
+# QR NARXINI STATE ORQALI O‘ZGARTIRISH
+# ============================================================
 
-def admin_bonus_process(message):
-    if not is_admin(message.from_user.id):
-        return
+def process_qr_price(message):
 
-    try:
-        parts = message.text.split()
+    global QR_PRICE
 
-        user_id = int(parts[0])
-        amount = int(parts[1])
+    admin_id = message.from_user.id
 
-        conn = get_db()
-        cur = conn.cursor()
+    state = admin_states.get(
+        admin_id
+    )
 
-        cur.execute("""
-            UPDATE users
-            SET bonus=bonus+?
-            WHERE id=?
-        """, (
-            amount,
-            user_id
-        ))
+    if not state:
+        return False
 
-        conn.commit()
-        conn.close()
+    if state.get("action") != "change_qr_price":
+        return False
 
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ {user_id} ga "
-            f"{amount:,} bonus berildi."
-        )
-
-        try:
-            bot.send_message(
-                user_id,
-                f"🎁 Sizga <b>{amount:,} bonus</b> berildi!"
-            )
-        except:
-            pass
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Format noto‘g‘ri."
-        )
-
-
-# =========================================================
-# ADMIN ADD MONEY
-# =========================================================
-
-def admin_add_money_process(message):
-    if not is_admin(message.from_user.id):
-        return
+    if not is_admin(admin_id):
+        return False
 
     try:
-        parts = message.text.split()
 
-        user_id = int(parts[0])
-        amount = int(parts[1])
-
-        user = get_user(user_id)
-
-        if not user:
-            bot.send_message(
-                message.chat.id,
-                "❌ Foydalanuvchi topilmadi."
+        new_price = int(
+            message.text.replace(
+                " ",
+                ""
             )
-            return
-
-        add_balance(
-            user_id,
-            amount,
-            f"Admin tomonidan qo‘shildi"
         )
 
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
+        if new_price <= 0:
+            raise ValueError
+
+    except ValueError:
 
         bot.send_message(
             message.chat.id,
-            f"✅ {amount:,} so‘m qo‘shildi."
+            "❌ Narx noto‘g‘ri.\n\n"
+            "Masalan:\n"
+            "<code>500</code>"
         )
 
-        try:
-            bot.send_message(
-                user_id,
-                f"➕ Admin hisobingizga "
-                f"<b>{amount:,} so‘m</b> qo‘shdi."
-            )
-        except:
-            pass
+        return True
 
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Format noto‘g‘ri."
+    QR_PRICE = new_price
+
+    admin_states.pop(
+        admin_id,
+        None
+    )
+
+    bot.send_message(
+        message.chat.id,
+        "✅ <b>QR NARXI O‘ZGARTIRILDI</b>\n\n"
+        f"💰 Yangi narx: "
+        f"<b>{QR_PRICE:,} so‘m</b>"
+    )
+
+    return True
+
+
+# ============================================================
+# BROADCAST BOSHLASH
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_broadcast"
+)
+def broadcast_start(call):
+
+    if not is_admin(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
         )
 
-
-# =========================================================
-# ADMIN REMOVE MONEY
-# =========================================================
-
-def admin_remove_money_process(message):
-    if not is_admin(message.from_user.id):
         return
 
-    try:
-        parts = message.text.split()
+    admin_states[call.from_user.id] = {
+        "action": "broadcast"
+    }
 
-        user_id = int(parts[0])
-        amount = int(parts[1])
+    bot.answer_callback_query(
+        call.id
+    )
 
-        success = remove_balance(
-            user_id,
-            amount,
-            "Admin tomonidan ayirildi"
-        )
-
-        if not success:
-            bot.send_message(
-                message.chat.id,
-                "❌ Foydalanuvchi topilmadi yoki balans yetarli emas."
-            )
-            return
-
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ {amount:,} so‘m ayirildi."
-        )
-
-        try:
-            bot.send_message(
-                user_id,
-                f"➖ Hisobingizdan "
-                f"<b>{amount:,} so‘m</b> ayirildi."
-            )
-        except:
-            pass
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Format noto‘g‘ri."
-        )
+    bot.send_message(
+        call.message.chat.id,
+        "📢 <b>BROADCAST</b>\n\n"
+        "Barcha foydalanuvchilarga yubormoqchi "
+        "bo‘lgan xabaringizni yozing.\n\n"
+        "Matn, rasm yoki video yuborishingiz mumkin."
+    )
 
 
-# =========================================================
-# ADMIN BLOCK
-# =========================================================
+# ============================================================
+# BROADCAST TEXT
+# ============================================================
 
-def admin_block_process(message):
-    if not is_admin(message.from_user.id):
-        return
+def broadcast_text(message):
 
-    try:
-        user_id = int(message.text)
+    admin_id = message.from_user.id
 
-        conn = get_db()
-        cur = conn.cursor()
+    state = admin_states.get(
+        admin_id
+    )
 
-        cur.execute("""
-            UPDATE users
-            SET is_blocked=1
-            WHERE id=?
-        """, (user_id,))
+    if not state:
+        return False
 
-        conn.commit()
-        conn.close()
+    if state.get("action") != "broadcast":
+        return False
 
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"🚫 <code>{user_id}</code> bloklandi."
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-
-
-# =========================================================
-# ADMIN UNBLOCK
-# =========================================================
-
-def admin_unblock_process(message):
-    if not is_admin(message.from_user.id):
-        return
-
-    try:
-        user_id = int(message.text)
-
-        conn = get_db()
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE users
-            SET is_blocked=0
-            WHERE id=?
-        """, (user_id,))
-
-        conn.commit()
-        conn.close()
-
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"🔓 <code>{user_id}</code> blokdan chiqarildi."
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ ID noto‘g‘ri."
-        )
-
-
-# =========================================================
-# BROADCAST
-# =========================================================
-
-def admin_broadcast_process(message):
-    if not is_admin(message.from_user.id):
-        return
-
-    text = message.text
+    if not is_admin(admin_id):
+        return False
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT id FROM users WHERE is_blocked=0"
+        "SELECT user_id FROM users WHERE blocked=0"
     )
 
     users = cur.fetchall()
 
     conn.close()
 
-    sent = 0
+    total = len(users)
+    success = 0
     failed = 0
 
-    for user in users:
+    bot.send_message(
+        message.chat.id,
+        "📢 <b>Broadcast boshlandi...</b>\n\n"
+        f"👥 Foydalanuvchilar: <b>{total}</b>"
+    )
+
+    for row in users:
+
+        target_id = int(
+            row["user_id"]
+        )
+
         try:
-            bot.send_message(
-                user["id"],
-                text
+
+            bot.copy_message(
+                target_id,
+                message.chat.id,
+                message.message_id
             )
 
-            sent += 1
+            success += 1
 
-        except:
+        except Exception:
+
             failed += 1
 
-    user_states.pop(
-        message.from_user.id,
+        # Telegram flood limitidan saqlanish
+        time.sleep(0.05)
+
+    admin_states.pop(
+        admin_id,
         None
     )
 
     bot.send_message(
         message.chat.id,
-        "📢 <b>Broadcast tugadi</b>\n\n"
-        f"✅ Yuborildi: {sent}\n"
-        f"❌ Xato: {failed}"
+        "✅ <b>BROADCAST TUGADI</b>\n\n"
+        f"👥 Jami: <b>{total}</b>\n"
+        f"✅ Yetkazildi: <b>{success}</b>\n"
+        f"❌ Yetkazilmadi: <b>{failed}</b>"
+    )
+
+    return True
+
+
+# ============================================================
+# BROADCAST PHOTO
+# ============================================================
+
+@bot.message_handler(
+    content_types=["photo"],
+    func=lambda message:
+    message.from_user.id in admin_states
+    and
+    admin_states.get(
+        message.from_user.id,
+        {}
+    ).get("action") == "broadcast"
+)
+def broadcast_photo(message):
+
+    broadcast_text(
+        message
     )
 
 
-# =========================================================
-# ADMIN PRICE
-# =========================================================
+# ============================================================
+# BROADCAST VIDEO
+# ============================================================
 
-def admin_price_process(message):
-    if not is_admin(message.from_user.id):
+@bot.message_handler(
+    content_types=["video"],
+    func=lambda message:
+    message.from_user.id in admin_states
+    and
+    admin_states.get(
+        message.from_user.id,
+        {}
+    ).get("action") == "broadcast"
+)
+def broadcast_video(message):
+
+    broadcast_text(
+        message
+    )
+
+
+# ============================================================
+# ADMIN PANELGA QR NARX BUTTONINI QO‘SHISH
+# ============================================================
+
+# ESKI admin_menu() FUNKSIYASINI SHU BILAN ALMASHTIR
+def admin_menu():
+
+    kb = types.InlineKeyboardMarkup(
+        row_width=2
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "👥 Foydalanuvchilar",
+            callback_data="admin_users"
+        ),
+        types.InlineKeyboardButton(
+            "📊 Statistika",
+            callback_data="admin_stats"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "💳 To‘lovlar",
+            callback_data="admin_payments"
+        ),
+        types.InlineKeyboardButton(
+            "➕ Pul qo‘shish",
+            callback_data="admin_add_money"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "➖ Pul ayirish",
+            callback_data="admin_remove_money"
+        ),
+        types.InlineKeyboardButton(
+            "🚫 Bloklash",
+            callback_data="block_user"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔓 Blokdan chiqarish",
+            callback_data="unblock_user"
+        ),
+        types.InlineKeyboardButton(
+            "📢 Broadcast",
+            callback_data="admin_broadcast"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "👑 Adminlar",
+            callback_data="admin_admins"
+        ),
+        types.InlineKeyboardButton(
+            "📜 QR tarixi",
+            callback_data="admin_qr_history"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "💰 QR narxi",
+            callback_data="admin_qr_price"
+        )
+    )
+
+    return kb
+
+
+# ============================================================
+# ADMIN PAYMENTS
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data == "admin_payments"
+)
+def admin_payments(call):
+
+    if not is_admin(call.from_user.id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Ruxsat yo‘q!",
+            show_alert=True
+        )
+
         return
 
-    try:
-        price = int(message.text)
+    bot.answer_callback_query(
+        call.id
+    )
 
-        if price <= 0:
-            raise ValueError
-
-        set_setting(
-            "qr_price",
-            price
-        )
-
-        user_states.pop(
-            message.from_user.id,
-            None
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ QR narxi <b>{price:,} so‘m</b> qilib o‘rnatildi."
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Narx noto‘g‘ri."
-        )
-
-
-# =========================================================
-# ADMIN LIST
-# =========================================================
-
-def admin_admins(call):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT user_id FROM admins"
+    cur.execute("""
+        SELECT
+            COUNT(*) AS count,
+            COALESCE(SUM(price), 0) AS total
+        FROM qr_codes
+    """)
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    count = row["count"]
+    total = row["total"]
+
+    bot.send_message(
+        call.message.chat.id,
+        "💳 <b>TO‘LOVLAR</b>\n\n"
+        f"📱 QR soni: <b>{count}</b>\n"
+        f"💰 QR tushumi: <b>{total:,} so‘m</b>\n\n"
+        "📌 Haqiqiy karta to‘lovlari "
+        "admin tasdig‘i orqali balansga qo‘shiladi."
     )
+
+
+# ============================================================
+# TEXT HANDLERGA ULASH
+# ============================================================
+
+# 1-qismdagi text_handler() ICHIDA,
+# "text = message.text" DAN KEYIN SHU TARTIBDA QO‘Y:
+
+def process_part5_states(message):
+
+    # QR narxi
+    if process_qr_price(message):
+        return True
+
+    # Admin buyruqlari
+    if process_admin_actions(message):
+        return True
+
+    # Payment amount
+    if process_payment_amount(message):
+        return True
+
+    # Broadcast
+    if broadcast_text(message):
+        return True
+
+    return False
+
+# ============================================================
+# 6-QISM — TARIX TIZIMI
+# ============================================================
+
+# ============================================================
+# QR TARIXI — USER
+# ============================================================
+
+def user_qr_history(message):
+
+    user_id = message.from_user.id
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            qr_type,
+            data,
+            price,
+            created_at
+        FROM qr_codes
+        WHERE user_id=?
+        ORDER BY id DESC
+        LIMIT 20
+    """, (user_id,))
 
     rows = cur.fetchall()
 
     conn.close()
 
-    text = "👑 <b>Adminlar</b>\n\n"
+    if not rows:
+
+        bot.send_message(
+            message.chat.id,
+            "📜 <b>QR TARIXI</b>\n\n"
+            "Siz hali QR yaratmagansiz."
+        )
+
+        return
+
+    text = "📜 <b>QR TARIXI</b>\n\n"
 
     for row in rows:
-        text += f"🆔 <code>{row['user_id']}</code>\n"
+
+        qr_type = row["qr_type"]
+        price = int(row["price"] or 0)
+        created = row["created_at"]
+
+        text += (
+            f"🔹 <b>#{row['id']}</b>\n"
+            f"📱 Turi: <b>{qr_type}</b>\n"
+            f"💰 Narxi: <b>{price:,} so‘m</b>\n"
+            f"🕐 {created}\n"
+            "────────────\n"
+        )
 
     bot.send_message(
-        call.message.chat.id,
+        message.chat.id,
         text
     )
 
 
-# =========================================================
-# QR HISTORY ADMIN
-# =========================================================
+# ============================================================
+# USER — TRANZAKSIYA TARIXI
+# ============================================================
 
-def admin_qr_history(call):
+def user_transaction_history(message):
+
+    user_id = message.from_user.id
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Agar transactions jadvali yo‘q bo‘lsa yaratadi
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        SELECT
+            amount,
+            type,
+            description,
+            created_at
+        FROM transactions
+        WHERE user_id=?
+        ORDER BY id DESC
+        LIMIT 20
+    """, (user_id,))
+
+    rows = cur.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    if not rows:
+
+        bot.send_message(
+            message.chat.id,
+            "📜 <b>TRANZAKSIYALAR</b>\n\n"
+            "Hali tranzaksiya mavjud emas."
+        )
+
+        return
+
+    text = "📜 <b>TRANZAKSIYA TARIXI</b>\n\n"
+
+    for row in rows:
+
+        amount = int(
+            row["amount"] or 0
+        )
+
+        if amount >= 0:
+            sign = "➕"
+        else:
+            sign = "➖"
+
+        text += (
+            f"{sign} <b>{abs(amount):,} so‘m</b>\n"
+            f"📝 {row['description'] or '-'}\n"
+            f"🕐 {row['created_at']}\n"
+            "────────────\n"
+        )
+
+    bot.send_message(
+        message.chat.id,
+        text
+    )
+
+
+# ============================================================
+# TRANSACTION QO‘SHISH
+# ============================================================
+
+def add_transaction(
+    user_id,
+    amount,
+    transaction_type,
+    description
+):
+
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT * FROM qr_codes
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        INSERT INTO transactions
+        (
+            user_id,
+            amount,
+            type,
+            description
+        )
+        VALUES (?, ?, ?, ?)
+    """, (
+        user_id,
+        amount,
+        transaction_type,
+        description
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# BALANS O‘ZGARISHINI TRANZAKSIYAGA ULASH
+# ============================================================
+
+def change_balance_with_history(
+    user_id,
+    amount,
+    description
+):
+
+    success = change_balance(
+        user_id,
+        amount
+    )
+
+    if not success:
+        return False
+
+    if amount > 0:
+
+        transaction_type = "credit"
+
+    elif amount < 0:
+
+        transaction_type = "debit"
+
+    else:
+
+        transaction_type = "system"
+
+    add_transaction(
+        user_id,
+        amount,
+        transaction_type,
+        description
+    )
+
+    return True
+
+
+# ============================================================
+# QR YARATILGANDA TRANZAKSIYA
+# ============================================================
+
+def charge_qr(user_id):
+
+    balance = get_balance(
+        user_id
+    )
+
+    if balance < QR_PRICE:
+
+        return False
+
+    success = change_balance_with_history(
+        user_id,
+        -QR_PRICE,
+        "QR kod yaratish uchun to‘lov"
+    )
+
+    return success
+
+
+# ============================================================
+# USER QR YARATISHNI PULLIK QILISH
+# ============================================================
+
+def send_paid_qr(
+    message,
+    qr_type,
+    data
+):
+
+    user_id = message.from_user.id
+
+    balance = get_balance(
+        user_id
+    )
+
+    if balance < QR_PRICE:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ <b>Balansingiz yetarli emas.</b>\n\n"
+            f"💰 QR narxi: <b>{QR_PRICE:,} so‘m</b>\n"
+            f"💳 Balansingiz: <b>{balance:,} so‘m</b>\n\n"
+            "Hisobingizni to‘ldiring."
+        )
+
+        return False
+
+    # PUL YECHISH
+    success = charge_qr(
+        user_id
+    )
+
+    if not success:
+
+        bot.send_message(
+            message.chat.id,
+            "❌ Balansdan pul yechilmadi."
+        )
+
+        return False
+
+    try:
+
+        image = create_qr(
+            data
+        )
+
+        # QR TARIXI
+        save_qr(
+            user_id,
+            qr_type,
+            data
+        )
+
+        new_balance = get_balance(
+            user_id
+        )
+
+        bot.send_photo(
+            message.chat.id,
+            image,
+            caption=(
+                "✅ <b>QR KOD TAYYOR!</b>\n\n"
+                f"📱 Turi: <b>{qr_type}</b>\n"
+                f"💰 To‘lov: <b>{QR_PRICE:,} so‘m</b>\n"
+                f"💳 Qolgan balans: "
+                f"<b>{new_balance:,} so‘m</b>\n\n"
+                "📷 Telefon kamerasi bilan "
+                "skaner qilishingiz mumkin."
+            )
+        )
+
+        return True
+
+    except Exception as e:
+
+        # QR yaratish xato bo‘lsa pulni qaytarish
+        change_balance_with_history(
+            user_id,
+            QR_PRICE,
+            "QR yaratishda xatolik — pul qaytarildi"
+        )
+
+        logging.exception(
+            "PAID QR ERROR: %s",
+            e
+        )
+
+        bot.send_message(
+            message.chat.id,
+            "❌ QR yaratishda xatolik.\n\n"
+            "💰 Pul balansingizga qaytarildi."
+        )
+
+        return False
+
+
+# ============================================================
+# ADMIN — TO‘LIQ QR TARIXI
+# ============================================================
+
+def admin_full_qr_history(call):
+
+    if not is_admin(
+        call.from_user.id
+    ):
+        return
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            user_id,
+            qr_type,
+            price,
+            created_at
+        FROM qr_codes
         ORDER BY id DESC
-        LIMIT 30
+        LIMIT 50
     """)
 
     rows = cur.fetchall()
@@ -2117,21 +3898,25 @@ def admin_qr_history(call):
     conn.close()
 
     if not rows:
+
         bot.send_message(
             call.message.chat.id,
             "📜 QR tarixi bo‘sh."
         )
+
         return
 
-    text = "📜 <b>QR tarixi</b>\n\n"
+    text = "📜 <b>ADMIN — QR TARIXI</b>\n\n"
 
     for row in rows:
+
         text += (
-            f"#{row['id']} | "
-            f"👤 {row['user_id']} | "
-            f"{row['qr_type']} | "
-            f"{row['price']:,} so‘m\n"
-            f"🕐 {row['created_at']}\n\n"
+            f"#{row['id']}\n"
+            f"👤 User: <code>{row['user_id']}</code>\n"
+            f"📱 Turi: <b>{row['qr_type']}</b>\n"
+            f"💰 Narxi: <b>{row['price']:,} so‘m</b>\n"
+            f"🕐 {row['created_at']}\n"
+            "────────────\n"
         )
 
     bot.send_message(
@@ -2140,72 +3925,1145 @@ def admin_qr_history(call):
     )
 
 
-# =========================================================
-# ADMIN COMMAND MENU
-# =========================================================
+# ============================================================
+# ADMIN — USER TRANZAKSIYALARI
+# ============================================================
 
-@bot.message_handler(commands=["id"])
-def get_id(message):
-    bot.send_message(
-        message.chat.id,
-        f"🆔 Sizning Telegram ID'ingiz:\n"
-        f"<code>{message.from_user.id}</code>"
-    )
+def admin_user_transactions(
+    message,
+    target_user_id
+):
 
-
-@bot.message_handler(commands=["phone"])
-def phone_request(message):
-    if is_blocked(message.from_user.id):
+    if not is_admin(
+        message.from_user.id
+    ):
         return
 
-    kb = types.ReplyKeyboardMarkup(
-        resize_keyboard=True,
-        one_time_keyboard=True
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        SELECT
+            amount,
+            type,
+            description,
+            created_at
+        FROM transactions
+        WHERE user_id=?
+        ORDER BY id DESC
+        LIMIT 30
+    """, (
+        target_user_id,
+    ))
+
+    rows = cur.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    if not rows:
+
+        bot.send_message(
+            message.chat.id,
+            "📜 Bu foydalanuvchida "
+            "tranzaksiya yo‘q."
+        )
+
+        return
+
+    text = (
+        "📜 <b>USER TRANZAKSIYALARI</b>\n\n"
+        f"🆔 ID: <code>{target_user_id}</code>\n\n"
     )
 
-    button = types.KeyboardButton(
-        "📞 Telefon raqamimni yuborish",
-        request_contact=True
-    )
+    for row in rows:
 
-    kb.add(button)
+        amount = int(
+            row["amount"] or 0
+        )
+
+        sign = "+" if amount >= 0 else ""
+
+        text += (
+            f"{sign}{amount:,} so‘m\n"
+            f"📝 {row['description'] or '-'}\n"
+            f"🕐 {row['created_at']}\n"
+            "────────────\n"
+        )
 
     bot.send_message(
         message.chat.id,
-        "📞 Telefon raqamingizni yuboring:",
-        reply_markup=kb
+        text
     )
 
 
-# =========================================================
-# ERROR HANDLER
-# =========================================================
+# ============================================================
+# HISTORY MENU
+# ============================================================
 
-def safe_polling():
-    while True:
+def history_menu():
+
+    kb = types.InlineKeyboardMarkup(
+        row_width=1
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "📱 QR tarixim",
+            callback_data="my_qr_history"
+        )
+    )
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "💳 Pul tarixim",
+            callback_data="my_transactions"
+        )
+    )
+
+    return kb
+
+
+# ============================================================
+# HISTORY CALLBACK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data in [
+        "my_qr_history",
+        "my_transactions"
+    ]
+)
+def history_callback(call):
+
+    user_id = call.from_user.id
+
+    if is_blocked(user_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Siz bloklangansiz!",
+            show_alert=True
+        )
+
+        return
+
+    bot.answer_callback_query(
+        call.id
+    )
+
+    if call.data == "my_qr_history":
+
+        user_qr_history(
+            call.message
+        )
+
+    elif call.data == "my_transactions":
+
+        user_transaction_history(
+            call.message
+        )
+
+
+# ============================================================
+# HISTORY BUTTON
+# ============================================================
+
+def show_history_menu(message):
+
+    bot.send_message(
+        message.chat.id,
+        "📜 <b>TARIX</b>\n\n"
+        "Kerakli bo‘limni tanlang:",
+        reply_markup=history_menu()
+    )
+    
+    
+# ============================================================
+# 7-QISM — USER MENU + QR TO'LOVINI TO'LIQ ULASH
+# ============================================================
+
+# ============================================================
+# QR YARATISH BUTTONI
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "📱 QR yaratish"
+)
+def qr_create_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz botdan foydalanish uchun bloklangansiz."
+        )
+
+        return
+
+    send_qr_menu(message)
+
+
+# ============================================================
+# HISOB BUTTONI
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "💳 Hisob"
+)
+def balance_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    show_balance(message)
+
+
+# ============================================================
+# TARIX BUTTONI
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "📜 Tarix"
+)
+def history_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    show_history_menu(message)
+
+
+# ============================================================
+# BONUS BUTTONI
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "🎁 Bonus"
+)
+def bonus_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    balance = get_balance(user_id)
+
+    bot.send_message(
+        message.chat.id,
+        "🎁 <b>BONUS</b>\n\n"
+        "Hozircha bonus tizimi faol emas.\n\n"
+        f"💳 Sizning balansingiz: "
+        f"<b>{balance:,} so‘m</b>\n\n"
+        "Tez orada bonuslar qo‘shiladi."
+    )
+
+
+# ============================================================
+# YORDAM BUTTONI
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "🆘 Yordam"
+)
+def help_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "🆘 <b>YORDAM</b>\n\n"
+        "📱 <b>QR yaratish</b> — QR kod yaratasiz.\n"
+        "💳 <b>Hisob</b> — balansingizni ko‘rasiz.\n"
+        "📜 <b>Tarix</b> — QR va pul tarixingiz.\n"
+        "🎁 <b>Bonus</b> — bonuslar bo‘limi.\n\n"
+        "Muammo bo‘lsa administratorga murojaat qiling."
+    )
+
+
+# ============================================================
+# BOT HAQIDA
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: message.text == "ℹ️ Bot haqida"
+)
+def about_button(message):
+
+    user_id = message.from_user.id
+
+    register_user(message.from_user)
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "ℹ️ <b>QR CODE BOT</b>\n\n"
+        "⚡ Tezkor QR kod yaratish\n"
+        "🔗 Link\n"
+        "📝 Text\n"
+        "📞 Telefon\n"
+        "📍 Lokatsiya\n"
+        "📶 Wi-Fi\n\n"
+        f"💰 1 ta QR: <b>{QR_PRICE:,} so‘m</b>\n\n"
+        "🚀 Bot 24/7 ishlash uchun tayyorlangan."
+    )
+
+
+# ============================================================
+# QR CALLBACK — PULLIK QR
+# ============================================================
+
+# Eski qr_callback() funksiyasini o‘zgartirish uchun
+# yangi callback yaratmaymiz.
+#
+# Pastdagi process_qr_message() ichida
+# send_generated_qr() o‘rniga send_paid_qr()
+# ishlatiladi.
+
+
+# ============================================================
+# LINK — PULLIK QR
+# ============================================================
+
+def create_paid_link_qr(message, text):
+
+    return send_paid_qr(
+        message,
+        "Link",
+        text
+    )
+
+
+# ============================================================
+# TEXT — PULLIK QR
+# ============================================================
+
+def create_paid_text_qr(message, text):
+
+    return send_paid_qr(
+        message,
+        "Text",
+        text
+    )
+
+
+# ============================================================
+# PHONE — PULLIK QR
+# ============================================================
+
+def create_paid_phone_qr(message, phone):
+
+    qr_data = "tel:" + phone
+
+    return send_paid_qr(
+        message,
+        "Telefon",
+        qr_data
+    )
+
+
+# ============================================================
+# LOCATION — PULLIK QR
+# ============================================================
+
+def create_paid_location_qr(
+    message,
+    latitude,
+    longitude
+):
+
+    qr_data = (
+        f"geo:{latitude},{longitude}"
+    )
+
+    return send_paid_qr(
+        message,
+        "Lokatsiya",
+        qr_data
+    )
+
+
+# ============================================================
+# QR STATE PROCESS — YANGI VERSIYA
+# ============================================================
+
+def process_qr_message_paid(message):
+
+    user_id = message.from_user.id
+
+    state = qr_states.get(user_id)
+
+    if not state:
+
+        return False
+
+    if not message.text:
+
+        return True
+
+    qr_type = state.get("type")
+
+    text = message.text.strip()
+
+    # ========================================================
+    # LINK
+    # ========================================================
+
+    if qr_type == "link":
+
+        if not (
+            text.startswith("http://")
+            or text.startswith("https://")
+        ):
+
+            bot.send_message(
+                message.chat.id,
+                "❌ <b>Link noto‘g‘ri.</b>\n\n"
+                "https:// bilan boshlanadigan link yuboring.\n\n"
+                "Masalan:\n"
+                "<code>https://google.com</code>"
+            )
+
+            return True
+
+        success = create_paid_link_qr(
+            message,
+            text
+        )
+
+        if success:
+
+            qr_states.pop(
+                user_id,
+                None
+            )
+
+        return True
+
+    # ========================================================
+    # TEXT
+    # ========================================================
+
+    if qr_type == "text":
+
+        if not text:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Matn bo‘sh bo‘lmasligi kerak."
+            )
+
+            return True
+
+        success = create_paid_text_qr(
+            message,
+            text
+        )
+
+        if success:
+
+            qr_states.pop(
+                user_id,
+                None
+            )
+
+        return True
+
+    # ========================================================
+    # PHONE
+    # ========================================================
+
+    if qr_type == "phone":
+
+        phone = text.replace(
+            " ",
+            ""
+        ).replace(
+            "-",
+            ""
+        )
+
+        if not phone.startswith("+"):
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Telefon raqami + bilan boshlansin.\n\n"
+                "Masalan:\n"
+                "<code>+998901234567</code>"
+            )
+
+            return True
+
+        if not phone[1:].isdigit():
+
+            bot.send_message(
+                message.chat.id,
+                "❌ Telefon raqamida faqat raqamlar bo‘lsin."
+            )
+
+            return True
+
+        success = create_paid_phone_qr(
+            message,
+            phone
+        )
+
+        if success:
+
+            qr_states.pop(
+                user_id,
+                None
+            )
+
+        return True
+
+    # ========================================================
+    # LOCATION
+    # ========================================================
+
+    if qr_type == "location":
+
         try:
-            logging.info("Bot ishga tushmoqda...")
-            bot.infinity_polling(
-                skip_pending=True,
-                timeout=30,
-                long_polling_timeout=30
-            )
-        except Exception as e:
-            logging.exception(
-                "Polling xatosi: %s",
-                e
+
+            parts = text.split(",")
+
+            if len(parts) != 2:
+
+                raise ValueError
+
+            latitude = float(
+                parts[0].strip()
             )
 
+            longitude = float(
+                parts[1].strip()
+            )
 
-# =========================================================
-# START
-# =========================================================
+            if not (
+                -90 <= latitude <= 90
+            ):
+
+                raise ValueError
+
+            if not (
+                -180 <= longitude <= 180
+            ):
+
+                raise ValueError
+
+            success = create_paid_location_qr(
+                message,
+                latitude,
+                longitude
+            )
+
+            if success:
+
+                qr_states.pop(
+                    user_id,
+                    None
+                )
+
+        except Exception:
+
+            bot.send_message(
+                message.chat.id,
+                "❌ <b>Lokatsiya noto‘g‘ri.</b>\n\n"
+                "Masalan:\n"
+                "<code>41.311081,69.240562</code>"
+            )
+
+        return True
+
+    # ========================================================
+    # WIFI
+    # ========================================================
+
+    if qr_type == "wifi":
+
+        step = state.get("step")
+
+        # ----------------------------------------------------
+        # SSID
+        # ----------------------------------------------------
+
+        if step == "ssid":
+
+            if not text:
+
+                bot.send_message(
+                    message.chat.id,
+                    "❌ Wi-Fi nomi bo‘sh bo‘lmasin."
+                )
+
+                return True
+
+            qr_states[user_id]["ssid"] = text
+
+            qr_states[user_id]["step"] = "password"
+
+            bot.send_message(
+                message.chat.id,
+                "🔐 <b>Wi-Fi paroli</b>\n\n"
+                "Parolni yuboring.\n\n"
+                "Agar parol bo‘lmasa:\n"
+                "<code>none</code>"
+            )
+
+            return True
+
+        # ----------------------------------------------------
+        # PASSWORD
+        # ----------------------------------------------------
+
+        if step == "password":
+
+            qr_states[user_id]["password"] = text
+
+            qr_states[user_id]["step"] = "security"
+
+            kb = types.InlineKeyboardMarkup(
+                row_width=2
+            )
+
+            kb.add(
+                types.InlineKeyboardButton(
+                    "🔒 WPA/WPA2",
+                    callback_data="wifi_wpa"
+                ),
+                types.InlineKeyboardButton(
+                    "🔓 Ochiq",
+                    callback_data="wifi_none"
+                )
+            )
+
+            bot.send_message(
+                message.chat.id,
+                "🔐 <b>Wi-Fi himoyasi</b>\n\n"
+                "Himoya turini tanlang:",
+                reply_markup=kb
+            )
+
+            return True
+
+        return True
+
+    return False
+
+
+# ============================================================
+# YANGI WIFI CALLBACK — PULLIK
+# ============================================================
+
+@bot.callback_query_handler(
+    func=lambda call:
+    call.data in [
+        "wifi_wpa",
+        "wifi_none"
+    ]
+)
+def paid_wifi_security(call):
+
+    user_id = call.from_user.id
+
+    if is_blocked(user_id):
+
+        bot.answer_callback_query(
+            call.id,
+            "🚫 Siz bloklangansiz!",
+            show_alert=True
+        )
+
+        return
+
+    state = qr_states.get(user_id)
+
+    if not state:
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Sessiya tugagan.",
+            show_alert=True
+        )
+
+        return
+
+    if state.get("type") != "wifi":
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Xato sessiya.",
+            show_alert=True
+        )
+
+        return
+
+    if state.get("step") != "security":
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Wi-Fi ma'lumotlari to‘liq emas.",
+            show_alert=True
+        )
+
+        return
+
+    ssid = state.get(
+        "ssid",
+        ""
+    )
+
+    password = state.get(
+        "password",
+        ""
+    )
+
+    if call.data == "wifi_none":
+
+        security = "nopass"
+
+        password = ""
+
+    else:
+
+        security = "WPA"
+
+        if password.lower() == "none":
+
+            password = ""
+
+    qr_data = (
+        f"WIFI:"
+        f"T:{security};"
+        f"S:{ssid};"
+        f"P:{password};;"
+    )
+
+    # --------------------------------------------------------
+    # BALANS TEKSHIRISH
+    # --------------------------------------------------------
+
+    balance = get_balance(
+        user_id
+    )
+
+    if balance < QR_PRICE:
+
+        bot.answer_callback_query(
+            call.id,
+            "❌ Balans yetarli emas!",
+            show_alert=True
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "❌ <b>Balansingiz yetarli emas.</b>\n\n"
+            f"💰 QR narxi: <b>{QR_PRICE:,} so‘m</b>\n"
+            f"💳 Balansingiz: <b>{balance:,} so‘m</b>\n\n"
+            "💳 Hisob bo‘limidan balansni to‘ldiring."
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+        return
+
+    bot.answer_callback_query(
+        call.id,
+        "⏳ QR tayyorlanmoqda..."
+    )
+
+    try:
+
+        success = charge_qr(
+            user_id
+        )
+
+        if not success:
+
+            bot.send_message(
+                call.message.chat.id,
+                "❌ Balansdan pul yechib bo‘lmadi."
+            )
+
+            return
+
+        image = create_qr(
+            qr_data
+        )
+
+        save_qr(
+            user_id,
+            "Wi-Fi",
+            qr_data
+        )
+
+        new_balance = get_balance(
+            user_id
+        )
+
+        bot.send_photo(
+            call.message.chat.id,
+            image,
+            caption=(
+                "✅ <b>WI-FI QR TAYYOR!</b>\n\n"
+                f"📶 Wi-Fi: <b>{ssid}</b>\n"
+                f"🔐 Himoya: <b>{security}</b>\n"
+                f"💰 To‘lov: <b>{QR_PRICE:,} so‘m</b>\n"
+                f"💳 Qolgan balans: "
+                f"<b>{new_balance:,} so‘m</b>\n\n"
+                "📷 Telefon kamerasi bilan skaner qiling."
+            )
+        )
+
+        qr_states.pop(
+            user_id,
+            None
+        )
+
+    except Exception as e:
+
+        logging.exception(
+            "PAID WIFI ERROR: %s",
+            e
+        )
+
+        # QR yaratishda xato bo‘lsa pulni qaytarish
+        change_balance_with_history(
+            user_id,
+            QR_PRICE,
+            "Wi-Fi QR yaratishda xatolik — pul qaytarildi"
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Wi-Fi QR yaratishda xatolik.\n\n"
+            "💰 Pul balansingizga qaytarildi."
+        )
+
+
+# ============================================================
+# UMUMIY TEXT ROUTER
+# ============================================================
+
+@bot.message_handler(
+    content_types=["text"]
+)
+def universal_text_handler(message):
+
+    user_id = message.from_user.id
+
+    register_user(
+        message.from_user
+    )
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz botdan foydalanish uchun bloklangansiz."
+        )
+
+        return
+
+    text = message.text.strip()
+
+    # ========================================================
+    # ADMIN / STATE
+    # ========================================================
+
+    if process_part5_states(message):
+
+        return
+
+    # ========================================================
+    # QR STATE
+    # ========================================================
+
+    if process_qr_message_paid(message):
+
+        return
+
+    # ========================================================
+    # MENU
+    # ========================================================
+
+    if text == "📱 QR yaratish":
+
+        send_qr_menu(
+            message
+        )
+
+        return
+
+    if text == "💳 Hisob":
+
+        show_balance(
+            message
+        )
+
+        return
+
+    if text == "📜 Tarix":
+
+        show_history_menu(
+            message
+        )
+
+        return
+
+    if text == "🎁 Bonus":
+
+        bonus_button(
+            message
+        )
+
+        return
+
+    if text == "🆘 Yordam":
+
+        help_button(
+            message
+        )
+
+        return
+
+    if text == "ℹ️ Bot haqida":
+
+        about_button(
+            message
+        )
+
+        return
+
+    if text == "👑 Admin panel":
+
+        if is_admin(user_id):
+
+            bot.send_message(
+                message.chat.id,
+                "👑 <b>ADMIN PANEL</b>\n\n"
+                "Kerakli bo‘limni tanlang:",
+                reply_markup=admin_menu()
+            )
+
+        else:
+
+            bot.send_message(
+                message.chat.id,
+                "🚫 Ruxsat yo‘q."
+            )
+
+        return
+
+
+# ============================================================
+# USER MENU /start NI YANGILASH
+# ============================================================
+
+def send_main_menu(message):
+
+    user_id = message.from_user.id
+
+    register_user(
+        message.from_user
+    )
+
+    if is_blocked(user_id):
+
+        bot.send_message(
+            message.chat.id,
+            "🚫 Siz bloklangansiz."
+        )
+
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "🏠 <b>ASOSIY MENYU</b>\n\n"
+        "👇 Kerakli bo‘limni tanlang:",
+        reply_markup=main_menu(user_id)
+    )
+
+
+# ============================================================
+# CANCEL / BEKOR QILISH
+# ============================================================
+
+def cancel_all_states(user_id):
+
+    qr_states.pop(
+        user_id,
+        None
+    )
+
+    payment_states.pop(
+        user_id,
+        None
+    )
+
+    admin_states.pop(
+        user_id,
+        None
+    )
+
+
+# ============================================================
+# /CANCEL
+# ============================================================
+
+@bot.message_handler(
+    commands=["cancel"]
+)
+def cancel_command(message):
+
+    user_id = message.from_user.id
+
+    cancel_all_states(
+        user_id
+    )
+
+    bot.send_message(
+        message.chat.id,
+        "❌ Joriy amal bekor qilindi.\n\n"
+        "🏠 Asosiy menyu:",
+        reply_markup=main_menu(user_id)
+    )
+
+
+# ============================================================
+# /MENU
+# ============================================================
+
+@bot.message_handler(
+    commands=["menu"]
+)
+def menu_command(message):
+
+    send_main_menu(
+        message
+    )
+
+
+# ============================================================
+# DATABASE TRANSACTION TABLE
+# ============================================================
+
+def init_transactions():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# START BOT — YAKUNIY ISHGA TUSHIRISH
+# ============================================================
 
 if __name__ == "__main__":
+
+    print("=" * 60)
+    print("QR CODE BOT — 7-QISM")
+    print("=" * 60)
+
     init_db()
 
-    print("=" * 50)
-    print("QR CODE BOT ISHGA TUSHMOQDA")
-    print("=" * 50)
+    init_transactions()
 
-    safe_polling()
+    print(
+        f"ADMIN ID: {ADMIN_ID}"
+    )
+
+    print(
+        f"QR PRICE: {QR_PRICE} so'm"
+    )
+
+    print(
+        "DATABASE: OK"
+    )
+
+    print(
+        "BOT ISHGA TUSHMOQDA..."
+    )
+
+    start_bot()
+
