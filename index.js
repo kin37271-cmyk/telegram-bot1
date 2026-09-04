@@ -4025,13 +4025,10 @@ defineModule('handlers/userHandlers', _modules['handlers/userHandlers.js']);
 const requireModule = createScopedRequire('');
 
 const { Telegraf } = require('telegraf');
-const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const config = requireModule('./config');
 const db = requireModule('./database/db');
 const botManager = requireModule('./core/botManager');
-
-const fs = require('fs');
 
 const logFile = path.join(__dirname, 'data/app.log');
 function logToFile(...args) {
@@ -4061,7 +4058,6 @@ process.on('uncaughtException', (err) => {
 setInterval(() => {}, 30000);
 
 // Render.com va bulutli hostinglar uchun HTTP server (Port bind)
-const http = require('http');
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
