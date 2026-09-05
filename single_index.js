@@ -15,21 +15,20 @@ function defineModule(name, fn) {
   _modules[name] = fn;
 }
 
-function resolveLocalPath(currentDir, reqPath) {
+function resolveCanonical(currentDir, reqPath) {
   if (!reqPath.startsWith('.')) return reqPath;
   let resolved = path.join(currentDir, reqPath).replace(/\\/g, '/');
   if (resolved.startsWith('/')) resolved = resolved.slice(1);
-  if (_modules[resolved]) return resolved;
   if (_modules[resolved + '.js']) return resolved + '.js';
   if (_modules[resolved + '/index.js']) return resolved + '/index.js';
-  if (_modules[resolved + '/index']) return resolved + '/index';
+  if (_modules[resolved]) return resolved;
   return resolved;
 }
 
 function createScopedRequire(currentDir) {
   return function(modulePath) {
     if (modulePath.startsWith('.')) {
-      const resolved = resolveLocalPath(currentDir, modulePath);
+      const resolved = resolveCanonical(currentDir, modulePath);
       if (_modules[resolved]) {
         if (!_moduleCache[resolved]) {
           const m = { exports: {} };
@@ -118,7 +117,6 @@ module.exports = {
 };
 
 });
-defineModule('config', _modules['config.js']);
 
 // ---- FILE: database/db.js ----
 defineModule('database/db.js', function(exports, module, require) {
@@ -199,14 +197,18 @@ class Database {
         first_name: userObj.first_name || '',
         registered_at: now.toISOString(),
         tariff: 'free_trial',
+        balance: 0,
         trial_ends_at: trialEnds.toISOString(),
         subscription_ends_at: trialEnds.toISOString(),
         status: 'active'
       };
       this.save();
     } else {
-      // Ismi yoki username yangilangan bo'lsa yangilab qo'yamiz
       let updated = false;
+      if (this.data.users[id].balance === undefined) {
+        this.data.users[id].balance = 0;
+        updated = true;
+      }
       if (userObj.username && this.data.users[id].username !== userObj.username) {
         this.data.users[id].username = userObj.username;
         updated = true;
@@ -219,6 +221,45 @@ class Database {
     }
 
     return this.data.users[id];
+  }
+
+  // Balans boshqaruvi
+  getBalance(userId) {
+    const user = this.getUser(userId);
+    return user ? (user.balance || 0) : 0;
+  }
+
+  addBalance(userId, amount) {
+    const user = this.getUser(userId);
+    if (!user) return false;
+    const num = parseFloat(amount) || 0;
+    user.balance = (user.balance || 0) + num;
+    this.save();
+    return user.balance;
+  }
+
+  subtractBalance(userId, amount) {
+    const user = this.getUser(userId);
+    if (!user) return false;
+    const num = parseFloat(amount) || 0;
+    user.balance = Math.max(0, (user.balance || 0) - num);
+    this.save();
+    return user.balance;
+  }
+
+  addDays(userId, days) {
+    const user = this.getUser(userId);
+    if (!user) return false;
+    const numDays = parseInt(days) || 0;
+    const now = new Date();
+    const currentEnd = new Date(user.subscription_ends_at || now);
+    const baseDate = currentEnd > now ? currentEnd : now;
+    const newEnd = new Date(baseDate.getTime() + numDays * 24 * 60 * 60 * 1000);
+    user.subscription_ends_at = newEnd.toISOString();
+    user.notified_5h = false;
+    user.notified_expired = false;
+    this.save();
+    return this.getSubscriptionDaysLeft(userId);
   }
 
   isSubscriptionActive(userId) {
@@ -258,9 +299,12 @@ class Database {
 
     user.tariff = tariffId;
     user.subscription_ends_at = newEnd.toISOString();
+    user.notified_5h = false;
+    user.notified_expired = false;
     this.save();
     return true;
   }
+
 
   getAllUsers() {
     return Object.values(this.data.users);
@@ -422,6 +466,160 @@ class Database {
     return payment;
   }
 
+  // --- WEB APP SOZLAMALARI VA MA'LUMOTLARI ---
+  isWebappPublic() {
+    if (!this.data.settings) this.data.settings = {};
+    return this.data.settings.webapp_public === true;
+  }
+
+  setWebappPublic(val) {
+    if (!this.data.settings) this.data.settings = {};
+    this.data.settings.webapp_public = !!val;
+    this.save();
+    return this.data.settings.webapp_public;
+  }
+
+  toggleWebappPublic() {
+    const current = this.isWebappPublic();
+    return this.setWebappPublic(!current);
+  }
+
+  getWebappFullData(requestUserId) {
+    const id = parseInt(requestUserId);
+    const isAdmin = this.isAdmin(id);
+    const isOwner = this.isOwner(id);
+    const isPublic = this.isWebappPublic();
+
+    if (!isAdmin && !isPublic) {
+      return { error: 'ACCESS_DENIED', message: 'Web App hozirda faqat administratorlar uchun ochiq.' };
+    }
+
+    const stats = this.getStats();
+    const allUsers = this.getAllUsers();
+    const allBots = this.getAllBots();
+    const allPayments = Object.values(this.data.payments);
+
+    // Foydalanuvchi ma'lumotlari xaritasi
+    const userMap = {};
+    allUsers.forEach(u => {
+      userMap[String(u.id)] = u;
+    });
+
+    if (isAdmin) {
+      // Admin uchun to'liq ma'lumotlar
+      const enrichedBots = allBots.map(b => {
+        const owner = userMap[String(b.owner_id)] || { first_name: 'Noma\'lum', username: '', tariff: 'free_trial' };
+        const tariff = config.TARIFFS[owner.tariff] || { name: owner.tariff || 'Standart' };
+        const daysLeft = this.getSubscriptionDaysLeft(b.owner_id);
+        return {
+          id: b.id,
+          token: b.token, // Admin tokenlarni ko'radi
+          bot_username: b.bot_username,
+          bot_first_name: b.bot_first_name,
+          bot_id: b.bot_id,
+          template: b.template,
+          status: b.status,
+          created_at: b.created_at,
+          stats: b.stats || { users_count: 0, messages_count: 0 },
+          owner: {
+            id: b.owner_id,
+            first_name: owner.first_name,
+            username: owner.username,
+            tariff_id: owner.tariff,
+            tariff_name: tariff.name,
+            days_left: daysLeft,
+            subscription_ends_at: owner.subscription_ends_at
+          }
+        };
+      });
+
+      const enrichedUsers = allUsers.map(u => {
+        const userBots = allBots.filter(b => b.owner_id === u.id);
+        const tariff = config.TARIFFS[u.tariff] || { name: u.tariff || 'Standart' };
+        const daysLeft = this.getSubscriptionDaysLeft(u.id);
+        return {
+          id: u.id,
+          first_name: u.first_name || 'Foydalanuvchi',
+          username: u.username || '',
+          balance: u.balance || 0,
+          tariff_id: u.tariff || 'free_trial',
+          tariff_name: tariff.name || 'Standart',
+          days_left: daysLeft,
+          subscription_ends_at: u.subscription_ends_at,
+          registered_at: u.registered_at,
+          bots_count: userBots.length,
+          status: u.status || 'active',
+          is_admin: this.isAdmin(u.id),
+          is_owner: this.isOwner(u.id)
+        };
+      });
+
+      const adminsList = this.getAdmins().map(aid => {
+        const u = userMap[String(aid)] || { first_name: 'Admin', username: '' };
+        return {
+          id: aid,
+          first_name: u.first_name || 'Admin',
+          username: u.username || '',
+          is_owner: this.isOwner(aid)
+        };
+      });
+
+      return {
+        role: isOwner ? 'owner' : 'admin',
+        isAdmin: true,
+        isOwner: isOwner,
+        webapp_public: isPublic,
+        stats: stats,
+        bots: enrichedBots,
+        users: enrichedUsers,
+        admins: adminsList,
+        payments: allPayments,
+        tariffs: config.TARIFFS
+      };
+    } else {
+      // Oddiy foydalanuvchi uchun o'ziga tegishli ma'lumotlar
+      const myUser = this.getUser(id) || { id: id, tariff: 'free_trial', balance: 0 };
+      const myBots = this.getUserBots(id).map(b => ({
+        id: b.id,
+        token: b.token,
+        bot_username: b.bot_username,
+        bot_first_name: b.bot_first_name,
+        template: b.template,
+        status: b.status,
+        created_at: b.created_at,
+        stats: b.stats || { users_count: 0, messages_count: 0 }
+      }));
+      const tariff = config.TARIFFS[myUser.tariff] || { name: myUser.tariff || 'Standart' };
+      const daysLeft = this.getSubscriptionDaysLeft(id);
+
+      return {
+        role: 'user',
+        isAdmin: false,
+        isOwner: false,
+        webapp_public: isPublic,
+        stats: {
+          myBotsCount: myBots.length,
+          daysLeft: daysLeft,
+          tariffName: tariff.name,
+          balance: myUser.balance || 0
+        },
+        user: {
+          id: myUser.id,
+          first_name: myUser.first_name || 'Foydalanuvchi',
+          username: myUser.username || '',
+          balance: myUser.balance || 0,
+          tariff_id: myUser.tariff || 'free_trial',
+          tariff_name: tariff.name || 'Standart',
+          days_left: daysLeft,
+          subscription_ends_at: myUser.subscription_ends_at
+        },
+        bots: myBots,
+        tariffs: config.TARIFFS
+      };
+    }
+  }
+
+
   // --- STATISTIKA ---
   getStats() {
     const users = Object.values(this.data.users);
@@ -447,8 +645,8 @@ class Database {
 
 module.exports = new Database();
 
+
 });
-defineModule('database/db', _modules['database/db.js']);
 
 // ---- FILE: core/helpers.js ----
 defineModule('core/helpers.js', function(exports, module, require) {
@@ -469,7 +667,6 @@ module.exports = {
 };
 
 });
-defineModule('core/helpers', _modules['core/helpers.js']);
 
 // ---- FILE: core/keyboards.js ----
 defineModule('core/keyboards.js', function(exports, module, require) {
@@ -477,9 +674,17 @@ const { Markup } = require('telegraf');
 const { templates } = require('../templates');
 const config = require('../config');
 
+function getWebAppUrl(userId = '') {
+  const base = process.env.WEBAPP_URL || process.env.RENDER_EXTERNAL_URL || 'https://telegram-bot1-1-ivst.onrender.com';
+  const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  return `${cleanBase}/webapp${userId ? `?userId=${userId}` : ''}`;
+}
+
 module.exports = {
+  getWebAppUrl,
+
   // Asosiy foydalanuvchi menyusi
-  getMainKeyboard: (isAdmin = false) => {
+  getMainKeyboard: (isAdmin = false, isWebappPublic = false) => {
     const buttons = [
       ['🚀 Yangi Bot Yaratish', '📁 Mening Botlarim'],
       ['💎 Tariflar va Obuna', '👤 Profilim'],
@@ -487,11 +692,17 @@ module.exports = {
     ];
 
     if (isAdmin) {
-      buttons.push(['👑 Admin Panel']);
+      buttons.push(['👑 Admin Panel', '✨ Yangilanishlar']);
+      if (isWebappPublic) {
+        buttons.push(['🌐 Web App']);
+      }
+    } else if (isWebappPublic) {
+      buttons.push(['🌐 Web App']);
     }
 
     return Markup.keyboard(buttons).resize();
   },
+
 
   // 15 ta bot shablonlari inline tugmalari
   getTemplatesKeyboard: () => {
@@ -536,19 +747,44 @@ module.exports = {
   },
 
   // Admin panel asosiy menyusi
-  getAdminKeyboard: (isOwner = false) => {
+  getAdminKeyboard: (isOwner = false, isWebappPublic = false, userId = '') => {
+    const webAppUrl = getWebAppUrl(userId);
     const buttons = [
-      [Markup.button.callback('📊 Statistika', 'admin_stats'), Markup.button.callback('🤖 Mijoz Botlari', 'admin_bots')],
-      [Markup.button.callback('💳 To\'lov so\'rovlari', 'admin_payments'), Markup.button.callback('📢 Xabar tarqatish (Rassilka)', 'admin_broadcast')]
+      [
+        Markup.button.webApp('🌐 Web App Dashboard', webAppUrl)
+      ],
+      [
+        Markup.button.callback(
+          isWebappPublic ? '⚙️ Web App: 🟢 ON (Hamma ko\'radi)' : '⚙️ Web App: 🔴 OFF (Faqat Admin)',
+          'admin_toggle_webapp'
+        )
+      ],
+
+      [
+        Markup.button.callback('📊 Statistika', 'admin_stats'),
+        Markup.button.callback('🤖 Mijoz Botlari', 'admin_bots')
+      ],
+      [
+        Markup.button.callback('👥 Foydalanuvchilar (Mijozlar)', 'admin_users'),
+        Markup.button.callback('💳 To\'lovlar', 'admin_payments')
+      ],
+      [
+        Markup.button.callback('📢 Xabar tarqatish (Rassilka)', 'admin_broadcast')
+      ]
     ];
 
     if (isOwner) {
-      buttons.push([Markup.button.callback('👥 Adminlarni boshqarish', 'admin_manage_admins')]);
+      buttons.push([
+        Markup.button.callback('✨ Yangilanishlar Tarixi', 'admin_updates_info'),
+        Markup.button.callback('👥 Adminlarni boshqarish', 'admin_manage_admins')
+      ]);
     }
 
     buttons.push([Markup.button.callback('⬅️ Menyuga qaytish', 'admin_close')]);
     return Markup.inlineKeyboard(buttons);
   },
+
+
 
   // Bekor qilish inline tugmasi
   getCancelKeyboard: () => {
@@ -558,8 +794,1315 @@ module.exports = {
   }
 };
 
+
 });
-defineModule('core/keyboards', _modules['core/keyboards.js']);
+
+// ---- FILE: core/webapp.js ----
+defineModule('core/webapp.js', function(exports, module, require) {
+const db = require('../database/db');
+const botManager = require('./botManager');
+const config = require('../config');
+
+function getWebAppHtml(initialData = null, initialUserId = '') {
+  const initialDataJson = JSON.stringify(initialData || null).replace(/</g, '\\u003c');
+  return `<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Bot Maker Admin Dashboard</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-card: rgba(30, 41, 59, 0.75);
+      --bg-card-hover: rgba(51, 65, 85, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-gradient: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 16px;
+      --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      padding: 14px;
+      min-height: 100vh;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.12) 0px, transparent 50%);
+      background-attachment: fixed;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding-bottom: 40px;
+    }
+
+    /* HEADER */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .header-title h1 {
+      font-size: 18px;
+      font-weight: 800;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .header-title p {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .user-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-secondary);
+      padding: 6px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--border-color);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .user-badge.admin {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: rgba(99, 102, 241, 0.4);
+      color: #a5b4fc;
+    }
+
+    /* ACCESS SWITCH */
+    .access-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: var(--shadow);
+    }
+
+    .access-info h3 {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .access-info p {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .toggle-btn {
+      padding: 8px 16px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+
+    .toggle-btn.on {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.4);
+    }
+
+    .toggle-btn.off {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
+    /* STATS GRID */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stat-icon {
+      font-size: 18px;
+    }
+
+    .stat-val {
+      font-size: 17px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* TABS */
+    .tabs {
+      display: flex;
+      gap: 6px;
+      background: var(--bg-secondary);
+      padding: 4px;
+      border-radius: 14px;
+      margin-bottom: 16px;
+      border: 1px solid var(--border-color);
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: var(--accent-gradient);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+    }
+
+    /* SEARCH */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .search-input {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 10px 14px;
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+    }
+
+    /* BOT CARDS */
+    .card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .item-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .card-title-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .avatar-icon {
+      width: 40px;
+      height: 40px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .names-box h4 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .names-box a {
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge.running {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .badge.stopped {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .badge.tariff {
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    .badge.balance {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    /* GRID INFO */
+    .grid-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .grid-info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .info-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .info-val {
+      font-size: 12px;
+      font-weight: 600;
+      color: #e2e8f0;
+      word-break: break-all;
+    }
+
+    /* TOKEN BOX */
+    .token-box {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .token-text {
+      font-family: monospace;
+      font-size: 11px;
+      color: #cbd5e1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .action-btn {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+
+    .action-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--accent);
+    }
+
+    .action-btn.green {
+      background: rgba(34, 197, 94, 0.15);
+      border-color: rgba(34, 197, 94, 0.35);
+      color: #4ade80;
+    }
+
+    .action-btn.red {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.35);
+      color: #f87171;
+    }
+
+    .action-btn.gold {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: rgba(245, 158, 11, 0.35);
+      color: #fbbf24;
+    }
+
+    /* MODAL */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 999;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .modal-box {
+      background: #1e293b;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 20px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal-box h3 {
+      font-size: 16px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .modal-input {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .modal-input:focus {
+      border-color: var(--accent);
+    }
+
+    /* TOAST */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #1e293b;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 30px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--accent);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      transition: transform 0.3s;
+      z-index: 1000;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 16px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- HEADER -->
+    <div class="header">
+      <div class="header-title">
+        <h1>🚀 Bot Maker Dashboard</h1>
+        <p>Barcha botlar, mijozlar va hisob-kitoblar</p>
+      </div>
+      <div id="userBadge" class="user-badge admin">
+        <span>Yuklanmoqda...</span>
+      </div>
+    </div>
+
+    <!-- WEB APP ACCESS CONTROL -->
+    <div id="accessControlCard" class="access-card" style="display: none;">
+      <div class="access-info">
+        <h3>⚙️ Web App Kirish Rejimi</h3>
+        <p id="accessDesc">Web App kimlarga ko'rinishini boshqaring</p>
+      </div>
+      <button id="toggleAccessBtn" class="toggle-btn on" onclick="toggleWebAppAccess()">
+        <span>Yuklanmoqda...</span>
+      </button>
+    </div>
+
+    <!-- STATS GRID -->
+    <div id="statsGrid" class="stats-grid"></div>
+
+    <!-- TABS -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('bots')">🤖 Botlar (<span id="botsCount">0</span>)</button>
+      <button id="usersTabBtn" class="tab-btn" onclick="switchTab('users')" style="display: none;">👥 Mijozlar (<span id="usersCount">0</span>)</button>
+      <button id="adminsTabBtn" class="tab-btn" onclick="switchTab('admins')" style="display: none;">🛡 Adminlar (<span id="adminsCount">0</span>)</button>
+      <button id="paymentsTabBtn" class="tab-btn" onclick="switchTab('payments')" style="display: none;">💳 To'lovlar</button>
+    </div>
+
+    <!-- SEARCH BAR -->
+    <div class="filter-bar">
+      <input type="text" id="searchInput" class="search-input" placeholder="🔍 Qidiruv (bot, username, ID, token)..." oninput="renderTabContent()">
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div id="mainContent">
+      <div class="empty-state">Ma'lumotlar yuklanmoqda...</div>
+    </div>
+  </div>
+
+  <!-- MODAL: PUL / TARIF BOSHQARISH -->
+  <div id="userModal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 id="modalTitle">👤 Mijoz Hisobini Boshqarish</h3>
+      <p id="modalUserSubtitle" style="font-size: 12px; color: var(--text-muted);"></p>
+
+      <!-- 1. Balans qo'shish / ayirish -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size: 11px; color: var(--text-muted); font-weight:700;">💰 SUMMA (SO'M):</label>
+        <input type="number" id="modalAmountInput" class="modal-input" placeholder="Masalan: 50000">
+        <div style="display:flex; gap:8px; margin-top:4px;">
+          <button class="action-btn green" style="flex:1;" onclick="submitBalanceChange('add')">➕ Pul Qo'shish</button>
+          <button class="action-btn red" style="flex:1;" onclick="submitBalanceChange('sub')">➖ Pul Ayirish</button>
+        </div>
+      </div>
+
+      <hr style="border:0; border-top:1px solid var(--border-color);">
+
+      <!-- 2. Muddat uzaytirish -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size: 11px; color: var(--text-muted); font-weight:700;">⏳ MUDDAT QO'SHISH (KUN):</label>
+        <div style="display:flex; gap:8px;">
+          <input type="number" id="modalDaysInput" class="modal-input" style="flex:1;" placeholder="Kun (masalan: 30)">
+          <button class="action-btn gold" onclick="submitDaysAdd()">⏳ Qo'shish</button>
+        </div>
+      </div>
+
+      <hr style="border:0; border-top:1px solid var(--border-color);">
+
+      <!-- 3. Tarif tanlash -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size: 11px; color: var(--text-muted); font-weight:700;">💎 TARIF O'RNATISH:</label>
+        <div style="display:flex; gap:8px;">
+          <select id="modalTariffSelect" class="modal-input" style="flex:1;">
+            <option value="free_trial">🎁 7 Kunlik Bepul Sinov</option>
+            <option value="starter">🌱 Starter (1 Oylik)</option>
+            <option value="pro_month">⭐ 25 Pro (1 Oylik)</option>
+            <option value="business_3m">💼 Business (3 Oylik)</option>
+            <option value="vip_year">👑 VIP Premium (1 Yillik)</option>
+            <option value="unlimited_forever">♾ Cheksiz Umrbod</option>
+          </select>
+          <button class="action-btn" onclick="submitTariffChange()">💎 O'rnatish</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+        <button class="action-btn" onclick="closeModal()">Yopish</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast">
+    <span id="toastMsg">Xabar</span>
+  </div>
+
+  <script>
+    window.INITIAL_DATA = ${initialDataJson};
+
+    let tg = window.Telegram ? window.Telegram.WebApp : null;
+    if (tg) {
+      try {
+        tg.ready();
+        tg.expand();
+        tg.setHeaderColor('#0f172a');
+        tg.setBackgroundColor('#0f172a');
+      } catch(e) {}
+    }
+
+    let currentUserId = '${initialUserId || '8422157752'}';
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+      currentUserId = String(tg.initDataUnsafe.user.id);
+    }
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('userId')) {
+      currentUserId = urlParams.get('userId');
+    }
+
+    let globalData = window.INITIAL_DATA || null;
+    let currentTab = 'bots';
+    let hiddenTokens = {};
+    let selectedUserIdForModal = null;
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toastMsg').innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function copyToClipboard(text, label = 'Nusxalandi!') {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast('📋 ' + label)).catch(() => fallbackCopy(text, label));
+      } else {
+        fallbackCopy(text, label);
+      }
+    }
+
+    function fallbackCopy(text, label) {
+      const i = document.createElement('input');
+      i.value = text;
+      document.body.appendChild(i);
+      i.select();
+      document.execCommand('copy');
+      document.body.removeChild(i);
+      showToast('📋 ' + label);
+    }
+
+    async function loadData() {
+      try {
+        const res = await fetch('/api/webapp/data?userId=' + encodeURIComponent(currentUserId), {
+          headers: { 'Bypass-Tunnel-Reminder': 'true' }
+        });
+        const data = await res.json();
+        if (data.error === 'ACCESS_DENIED') {
+          document.getElementById('mainContent').innerHTML = '<div class="empty-state">⛔ ' + data.message + '</div>';
+          return;
+        }
+        globalData = data;
+        renderDashboard();
+      } catch (err) {
+        if (!globalData) {
+          document.getElementById('mainContent').innerHTML = '<div class="empty-state">Yuklashda xatolik yuz berdi. Qayta urinib ko\\'ring.</div>';
+        }
+      }
+    }
+
+    function renderDashboard() {
+      if (!globalData) return;
+      const isAdmin = !!globalData.isAdmin;
+      const isOwner = !!globalData.isOwner;
+
+      const userBadge = document.getElementById('userBadge');
+      userBadge.innerHTML = isOwner ? '👑 Bosh Admin' : (isAdmin ? '🛡 Admin' : '👤 ' + (globalData.user?.first_name || 'Foydalanuvchi'));
+
+      if (isAdmin) {
+        document.getElementById('usersTabBtn').style.display = 'flex';
+        document.getElementById('adminsTabBtn').style.display = 'flex';
+        document.getElementById('paymentsTabBtn').style.display = 'flex';
+        document.getElementById('accessControlCard').style.display = 'flex';
+        renderAccessButton(globalData.webapp_public);
+      }
+
+      // Stats
+      const statsGrid = document.getElementById('statsGrid');
+      if (isAdmin && globalData.stats) {
+        const s = globalData.stats;
+        statsGrid.innerHTML = \`
+          <div class="stat-card"><span class="stat-icon">👥</span><span class="stat-val">\${s.totalUsers || 0}</span><span class="stat-label">Mijozlar</span></div>
+          <div class="stat-card"><span class="stat-icon">🤖</span><span class="stat-val">\${s.totalBots || 0}</span><span class="stat-label">Botlar</span></div>
+          <div class="stat-card"><span class="stat-icon">🟢</span><span class="stat-val">\${s.activeBots || 0}</span><span class="stat-label">Faol</span></div>
+          <div class="stat-card"><span class="stat-icon">💰</span><span class="stat-val">\${(s.totalIncome || 0).toLocaleString()}</span><span class="stat-label">Daromad</span></div>
+        \`;
+      } else {
+        const s = globalData.stats || {};
+        statsGrid.innerHTML = \`
+          <div class="stat-card"><span class="stat-icon">🤖</span><span class="stat-val">\${s.myBotsCount || 0}</span><span class="stat-label">Botlarim</span></div>
+          <div class="stat-card"><span class="stat-icon">💰</span><span class="stat-val">\${(s.balance || 0).toLocaleString()} so'm</span><span class="stat-label">Balansim</span></div>
+          <div class="stat-card"><span class="stat-icon">⏳</span><span class="stat-val">\${s.daysLeft || 0} kun</span><span class="stat-label">Qolgan Kun</span></div>
+        \`;
+      }
+
+      document.getElementById('botsCount').innerText = (globalData.bots || []).length;
+      if (globalData.users) document.getElementById('usersCount').innerText = (globalData.users || []).length;
+      if (globalData.admins) document.getElementById('adminsCount').innerText = (globalData.admins || []).length;
+
+      renderTabContent();
+    }
+
+    function renderAccessButton(isPublic) {
+      const btn = document.getElementById('toggleAccessBtn');
+      const desc = document.getElementById('accessDesc');
+      if (isPublic) {
+        btn.className = 'toggle-btn on';
+        btn.innerHTML = '🟢 ON (Hamma ko\\'radi)';
+        desc.innerText = 'Hozirda Web App barcha foydalanuvchilar uchun ochiq.';
+      } else {
+        btn.className = 'toggle-btn off';
+        btn.innerHTML = '🔴 OFF (Faqat Admin)';
+        desc.innerText = 'Hozirda Web App faqat bot egasi va adminlarga ko\\'rinadi.';
+      }
+    }
+
+    async function toggleWebAppAccess() {
+      try {
+        const res = await fetch('/api/webapp/toggle_access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUserId })
+        });
+        const d = await res.json();
+        if (d.success) {
+          globalData.webapp_public = d.webapp_public;
+          renderAccessButton(d.webapp_public);
+          showToast(d.webapp_public ? '🟢 Web App hamma uchun yoqildi!' : '🔴 Web App faqat adminlar uchun qoldirildi!');
+        }
+      } catch(e) {}
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      event.target.closest('.tab-btn').classList.add('active');
+      renderTabContent();
+    }
+
+    function toggleToken(id) {
+      hiddenTokens[id] = !hiddenTokens[id];
+      renderTabContent();
+    }
+
+    function openUserModal(uId, uName, uTariff, uBalance, uDays) {
+      selectedUserIdForModal = uId;
+      document.getElementById('modalTitle').innerText = '👤 ' + uName + ' (ID: ' + uId + ')';
+      document.getElementById('modalUserSubtitle').innerText = 'Balansi: ' + Number(uBalance).toLocaleString() + ' so\\'m | Tarifi: ' + uTariff + ' (' + uDays + ' kun qoldi)';
+      document.getElementById('modalAmountInput').value = '';
+      document.getElementById('modalDaysInput').value = '';
+      document.getElementById('userModal').classList.add('active');
+    }
+
+    function closeModal() {
+      document.getElementById('userModal').classList.remove('active');
+      selectedUserIdForModal = null;
+    }
+
+    async function submitBalanceChange(type) {
+      const amount = document.getElementById('modalAmountInput').value;
+      if (!amount || Number(amount) <= 0) return alert('Iltimos to\\'g\\'ri summa kiriting!');
+      const endpoint = type === 'add' ? '/api/webapp/add_balance' : '/api/webapp/subtract_balance';
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId: selectedUserIdForModal, amount: Number(amount), userId: currentUserId })
+      });
+      const d = await res.json();
+      if (d.success) {
+        showToast(type === 'add' ? '➕ Pul qo\\'shildi!' : '➖ Pul ayirildi!');
+        closeModal();
+        loadData();
+      }
+    }
+
+    async function submitDaysAdd() {
+      const days = document.getElementById('modalDaysInput').value;
+      if (!days || Number(days) <= 0) return alert('Iltimos kun sonini kiriting!');
+      const res = await fetch('/api/webapp/add_days', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId: selectedUserIdForModal, days: Number(days), userId: currentUserId })
+      });
+      const d = await res.json();
+      if (d.success) {
+        showToast('⏳ ' + days + ' kun qo\\'shildi!');
+        closeModal();
+        loadData();
+      }
+    }
+
+    async function submitTariffChange() {
+      const tariff = document.getElementById('modalTariffSelect').value;
+      const res = await fetch('/api/webapp/set_tariff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId: selectedUserIdForModal, tariffId: tariff, userId: currentUserId })
+      });
+      const d = await res.json();
+      if (d.success) {
+        showToast('💎 Tarif o\\'rnatildi!');
+        closeModal();
+        loadData();
+      }
+    }
+
+    async function toggleBot(botId, curStatus) {
+      const newStatus = curStatus === 'running' ? 'stopped' : 'running';
+      const res = await fetch('/api/webapp/toggle_bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botId, status: newStatus, userId: currentUserId })
+      });
+      showToast(newStatus === 'running' ? '▶️ Bot ishga tushdi' : '⏹ Bot to\\'xtatildi');
+      loadData();
+    }
+
+    async function deleteBot(botId, name) {
+      if (!confirm('@' + name + ' botini o\\'chirishni tasdiqlaysizmi?')) return;
+      await fetch('/api/webapp/delete_bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botId, userId: currentUserId })
+      });
+      showToast('🗑 Bot o\\'chirildi');
+      loadData();
+    }
+
+    async function addAdminPrompt() {
+      const aid = prompt('Yangi admin Telegram ID sini kiriting:');
+      if (!aid) return;
+      const res = await fetch('/api/webapp/add_admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId: aid, userId: currentUserId })
+      });
+      const d = await res.json();
+      showToast(d.success ? '✅ Admin qo\\'shildi!' : '⚠️ ' + d.message);
+      loadData();
+    }
+
+    async function removeAdmin(aid) {
+      if (!confirm('ID: ' + aid + ' ni adminlikdan olishni xohlaysizmi?')) return;
+      const res = await fetch('/api/webapp/remove_admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId: aid, userId: currentUserId })
+      });
+      showToast('🗑 Admin o\\'chirildi');
+      loadData();
+    }
+
+    function renderTabContent() {
+      const content = document.getElementById('mainContent');
+      const q = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+
+      if (currentTab === 'bots') {
+        let bots = globalData.bots || [];
+        if (q) {
+          bots = bots.filter(b => (b.bot_first_name || '').toLowerCase().includes(q) || (b.bot_username || '').toLowerCase().includes(q) || (b.token || '').toLowerCase().includes(q) || (b.owner?.first_name || '').toLowerCase().includes(q) || String(b.owner?.id || '').includes(q));
+        }
+
+        if (bots.length === 0) {
+          content.innerHTML = '<div class="empty-state">🤖 Botlar topilmadi.</div>';
+          return;
+        }
+
+        let html = '<div class="card-list">';
+        bots.forEach(b => {
+          const isRunning = b.status === 'running';
+          const isTok = !!hiddenTokens[b.id];
+          const tokenShow = isTok ? b.token : (b.token ? b.token.slice(0, 10) + '••••••••••••••••' : 'Token yo\\'q');
+
+          html += \`
+            <div class="item-card">
+              <div class="card-header-row">
+                <div class="card-title-box">
+                  <div class="avatar-icon">🤖</div>
+                  <div class="names-box">
+                    <h4>\${escapeHtml(b.bot_first_name || 'Bot')}</h4>
+                    <a href="https://t.me/\${b.bot_username}" target="_blank">@\${b.bot_username} ↗</a>
+                  </div>
+                </div>
+                <span class="badge \${isRunning ? 'running' : 'stopped'}">\${isRunning ? '🟢 Faol' : '🔴 To\\'xtagan'}</span>
+              </div>
+
+              <!-- TOKEN -->
+              <div class="token-box">
+                <span class="token-text">🔑 \${tokenShow}</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="action-btn" onclick="toggleToken('\${b.id}')">\${isTok ? '🙈' : '👁'}</button>
+                  <button class="action-btn" onclick="copyToClipboard('\${b.token}', 'Token nusxalandi!')">📋</button>
+                </div>
+              </div>
+
+              <!-- INFO -->
+              <div class="grid-info">
+                <div class="grid-info-item"><span class="info-label">Shablon</span><span class="info-val">🌐 \${b.template}</span></div>
+                \${b.owner ? \`
+                  <div class="grid-info-item"><span class="info-label">Mijoz</span><span class="info-val">👤 \${escapeHtml(b.owner.first_name)} (ID: \${b.owner.id})</span></div>
+                  <div class="grid-info-item"><span class="info-label">Tarif</span><span class="info-val">💎 \${b.owner.tariff_name} (\${b.owner.days_left} kun)</span></div>
+                \` : ''}
+                <div class="grid-info-item"><span class="info-label">A'zolar</span><span class="info-val">👥 \${b.stats?.users_count || 0} ta</span></div>
+              </div>
+
+              <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="action-btn \${isRunning ? 'red' : 'green'}" onclick="toggleBot('\${b.id}', '\${b.status}')">\${isRunning ? '⏹ To\\'xtatish' : '▶️ Ishga tushirish'}</button>
+                <button class="action-btn red" onclick="deleteBot('\${b.id}', '\${b.bot_username}')">🗑 O'chirish</button>
+              </div>
+            </div>
+          \`;
+        });
+        html += '</div>';
+        content.innerHTML = html;
+
+      } else if (currentTab === 'users') {
+        let users = globalData.users || [];
+        if (q) {
+          users = users.filter(u => (u.first_name || '').toLowerCase().includes(q) || (u.username || '').toLowerCase().includes(q) || String(u.id).includes(q));
+        }
+
+        if (users.length === 0) {
+          content.innerHTML = '<div class="empty-state">👥 Mijozlar topilmadi.</div>';
+          return;
+        }
+
+        let html = '<div class="card-list">';
+        users.forEach(u => {
+          html += \`
+            <div class="item-card">
+              <div class="card-header-row">
+                <div class="card-title-box">
+                  <div class="avatar-icon">👤</div>
+                  <div class="names-box">
+                    <h4>\${escapeHtml(u.first_name)} \${u.username ? '(@' + u.username + ')' : ''}</h4>
+                    <span style="font-size:11px; color:var(--text-muted);">Telegram ID: <code>\${u.id}</code></span>
+                  </div>
+                </div>
+                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+                  <span class="badge balance">💰 \${(u.balance || 0).toLocaleString()} so'm</span>
+                  <span class="badge tariff">💎 \${u.tariff_name}</span>
+                </div>
+              </div>
+
+              <div class="grid-info">
+                <div class="grid-info-item"><span class="info-label">Botlari</span><span class="info-val">🤖 \${u.bots_count} ta bot</span></div>
+                <div class="grid-info-item"><span class="info-label">Obuna muddati</span><span class="info-val">⏳ \${u.days_left} kun qoldi</span></div>
+                <div class="grid-info-item"><span class="info-label">Tugash sanasi</span><span class="info-val">\${u.subscription_ends_at ? new Date(u.subscription_ends_at).toLocaleDateString() : 'Noma\\'lum'}</span></div>
+              </div>
+
+              <!-- BOSHQARISH TUGMALARI -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <button class="action-btn" onclick="copyToClipboard('\${u.id}', 'ID nusxalandi!')">📋 ID</button>
+                <div style="display:flex; gap:6px;">
+                  <button class="action-btn gold" onclick="openUserModal('\${u.id}', '\${escapeHtml(u.first_name)}', '\${u.tariff_name}', '\${u.balance || 0}', '\${u.days_left}')">
+                    ⚙️ Hisobni Boshqarish (Pul/Tarif)
+                  </button>
+                </div>
+              </div>
+            </div>
+          \`;
+        });
+        html += '</div>';
+        content.innerHTML = html;
+
+      } else if (currentTab === 'admins') {
+        let admins = globalData.admins || [];
+        let html = \`
+          <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+            <button class="action-btn green" onclick="addAdminPrompt()">➕ Yangi Admin Qo'shish</button>
+          </div>
+          <div class="card-list">
+        \`;
+
+        admins.forEach(a => {
+          html += \`
+            <div class="item-card">
+              <div class="card-header-row">
+                <div class="card-title-box">
+                  <div class="avatar-icon">\${a.is_owner ? '👑' : '🛡'}</div>
+                  <div class="names-box">
+                    <h4>\${escapeHtml(a.first_name)} \${a.username ? '(@' + a.username + ')' : ''}</h4>
+                    <span style="font-size:11px; color:var(--text-muted);">ID: <code>\${a.id}</code></span>
+                  </div>
+                </div>
+                <span class="badge tariff">\${a.is_owner ? '👑 Bosh Admin (Ega)' : '🛡 Yordamchi Admin'}</span>
+              </div>
+              \${!a.is_owner ? \`
+                <div style="display:flex; justify-content:flex-end;">
+                  <button class="action-btn red" onclick="removeAdmin('\${a.id}')">🗑 Adminlikdan Olish</button>
+                </div>
+              \` : ''}
+            </div>
+          \`;
+        });
+        html += '</div>';
+        content.innerHTML = html;
+
+      } else if (currentTab === 'payments') {
+        let payments = globalData.payments || [];
+        if (payments.length === 0) {
+          content.innerHTML = '<div class="empty-state">💳 To\\'lov arizalari yo\\'q.</div>';
+          return;
+        }
+
+        let html = '<div class="card-list">';
+        payments.slice().reverse().forEach(p => {
+          const isPending = p.status === 'pending';
+          const isApproved = p.status === 'approved';
+          html += \`
+            <div class="item-card">
+              <div class="card-header-row">
+                <div class="names-box">
+                  <h4>To'lov: \${(p.amount || 0).toLocaleString()} so'm</h4>
+                  <span style="font-size:11px; color:var(--text-muted);">Tarif: <b>\${p.tariff_name}</b> | Mijoz ID: <code>\${p.user_id}</code></span>
+                </div>
+                <span class="badge \${isApproved ? 'running' : (isPending ? 'balance' : 'stopped')}">
+                  \${isApproved ? '✅ Tasdiqlangan' : (isPending ? '⏳ Kutilmoqda' : '❌ Bekor qilingan')}
+                </span>
+              </div>
+              <p style="font-size:11px; color:var(--text-muted);">Sana: \${new Date(p.created_at).toLocaleString()}</p>
+            </div>
+          \`;
+        });
+        html += '</div>';
+        content.innerHTML = html;
+      }
+    }
+
+    function escapeHtml(t) {
+      if (!t) return '';
+      return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    if (globalData) {
+      renderDashboard();
+    } else {
+      loadData();
+    }
+  </script>
+</body>
+</html>`;
+}
+
+// HTTP API handler
+function handleWebAppRequests(req, res) {
+  const urlObj = new URL(req.url, 'http://localhost');
+  const pathname = urlObj.pathname;
+
+  // 1. Web App HTML
+  if (pathname === '/webapp' || pathname === '/admin/webapp') {
+    const userId = urlObj.searchParams.get('userId') || (config && config.OWNER_ID) || '8422157752';
+    const initialData = db.getWebappFullData(userId);
+    res.writeHead(200, { 
+      'Content-Type': 'text/html; charset=utf-8',
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(getWebAppHtml(initialData, userId));
+  }
+
+  // 2. API: Ma'lumotlarni olish
+  if (pathname === '/api/webapp/data' && req.method === 'GET') {
+    const userId = urlObj.searchParams.get('userId') || (config && config.OWNER_ID) || '8422157752';
+    const data = db.getWebappFullData(userId);
+    res.writeHead(200, { 
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(JSON.stringify(data));
+  }
+
+  // 3. API: Pul qo'shish
+  if (pathname === '/api/webapp/add_balance' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isAdmin(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Ruxsat yo\'q' }));
+        }
+        const newBal = db.addBalance(payload.targetUserId, payload.amount);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, balance: newBal }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 4. API: Pul ayirish / yechish
+  if (pathname === '/api/webapp/subtract_balance' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isAdmin(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Ruxsat yo\'q' }));
+        }
+        const newBal = db.subtractBalance(payload.targetUserId, payload.amount);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, balance: newBal }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 5. API: Muddat qo'shish
+  if (pathname === '/api/webapp/add_days' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isAdmin(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Ruxsat yo\'q' }));
+        }
+        const daysLeft = db.addDays(payload.targetUserId, payload.days);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, daysLeft }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 6. API: Tarif o'rnatish
+  if (pathname === '/api/webapp/set_tariff' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isAdmin(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Ruxsat yo\'q' }));
+        }
+        db.setTariff(payload.targetUserId, payload.tariffId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 7. API: Web App ON / OFF
+  if (pathname === '/api/webapp/toggle_access' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isAdmin(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Ruxsat yo\'q' }));
+        }
+        const newStatus = db.toggleWebappPublic();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, webapp_public: newStatus }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 8. API: Botni to'xtatish / yoqish
+  if (pathname === '/api/webapp/toggle_bot' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const b = db.getBot(payload.botId);
+        if (!b) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Bot topilmadi' }));
+        }
+        if (payload.status === 'running') {
+          await botManager.startBot(b);
+        } else {
+          botManager.stopBot(payload.botId);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 9. API: Botni o'chirish
+  if (pathname === '/api/webapp/delete_bot' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        botManager.stopBot(payload.botId);
+        db.deleteBot(payload.botId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 10. API: Admin qo'shish
+  if (pathname === '/api/webapp/add_admin' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isOwner(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Faqat Bosh Admin qo\'sha oladi' }));
+        }
+        const added = db.addAdmin(payload.targetUserId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: added, message: added ? 'Admin qo\'shildi' : 'Allaqachon admin' }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 11. API: Adminni o'chirish
+  if (pathname === '/api/webapp/remove_admin' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (!db.isOwner(payload.userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: 'Faqat Bosh Admin o\'chira oladi' }));
+        }
+        const removed = db.removeAdmin(payload.targetUserId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: removed }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  return false;
+}
+
+module.exports = {
+  getWebAppHtml,
+  handleWebAppRequests
+};
+});
 
 // ---- FILE: templates/ai.js ----
 defineModule('templates/ai.js', function(exports, module, require) {
@@ -726,7 +2269,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/ai', _modules['templates/ai.js']);
 
 // ---- FILE: templates/anonim.js ----
 defineModule('templates/anonim.js', function(exports, module, require) {
@@ -867,7 +2409,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/anonim', _modules['templates/anonim.js']);
 
 // ---- FILE: templates/autopost.js ----
 defineModule('templates/autopost.js', function(exports, module, require) {
@@ -938,7 +2479,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/autopost', _modules['templates/autopost.js']);
 
 // ---- FILE: templates/currency.js ----
 defineModule('templates/currency.js', function(exports, module, require) {
@@ -1079,7 +2619,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/currency', _modules['templates/currency.js']);
 
 // ---- FILE: templates/custom_buttons.js ----
 defineModule('templates/custom_buttons.js', function(exports, module, require) {
@@ -1451,7 +2990,6 @@ module.exports = {
   }
 };
 });
-defineModule('templates/custom_buttons', _modules['templates/custom_buttons.js']);
 
 // ---- FILE: templates/feedback.js ----
 defineModule('templates/feedback.js', function(exports, module, require) {
@@ -1542,7 +3080,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/feedback', _modules['templates/feedback.js']);
 
 // ---- FILE: templates/kino.js ----
 defineModule('templates/kino.js', function(exports, module, require) {
@@ -1639,7 +3176,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/kino', _modules['templates/kino.js']);
 
 // ---- FILE: templates/moderator.js ----
 defineModule('templates/moderator.js', function(exports, module, require) {
@@ -1743,7 +3279,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/moderator', _modules['templates/moderator.js']);
 
 // ---- FILE: templates/nakrutka.js ----
 defineModule('templates/nakrutka.js', function(exports, module, require) {
@@ -1953,7 +3488,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/nakrutka', _modules['templates/nakrutka.js']);
 
 // ---- FILE: templates/namoz.js ----
 defineModule('templates/namoz.js', function(exports, module, require) {
@@ -2063,7 +3597,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/namoz', _modules['templates/namoz.js']);
 
 // ---- FILE: templates/pul_topar.js ----
 defineModule('templates/pul_topar.js', function(exports, module, require) {
@@ -2222,7 +3755,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/pul_topar', _modules['templates/pul_topar.js']);
 
 // ---- FILE: templates/quiz.js ----
 defineModule('templates/quiz.js', function(exports, module, require) {
@@ -2378,7 +3910,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/quiz', _modules['templates/quiz.js']);
 
 // ---- FILE: templates/quotes.js ----
 defineModule('templates/quotes.js', function(exports, module, require) {
@@ -2458,7 +3989,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/quotes', _modules['templates/quotes.js']);
 
 // ---- FILE: templates/shop.js ----
 defineModule('templates/shop.js', function(exports, module, require) {
@@ -2640,7 +4170,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/shop', _modules['templates/shop.js']);
 
 // ---- FILE: templates/tools.js ----
 defineModule('templates/tools.js', function(exports, module, require) {
@@ -2740,111 +4269,404 @@ module.exports = {
 };
 
 });
-defineModule('templates/tools', _modules['templates/tools.js']);
 
 // ---- FILE: templates/translator.js ----
 defineModule('templates/translator.js', function(exports, module, require) {
 const axios = require('axios');
 const { Markup } = require('telegraf');
 
+function escapeHtml(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
+
+// Ko'p bosqichli ishonchli tarjima tizimi
+async function translateWithEngines(text, sl = 'auto', tl = 'uz') {
+  // 1. Google Clients5 Web API (Juda tez va ishonchli)
+  try {
+    const res = await axios.get('https://clients5.google.com/translate_a/t', {
+      params: { client: 'dict-chrome-ex', sl, tl, q: text },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': '*/*'
+      },
+      timeout: 7000
+    });
+    if (res.data) {
+      let result = '';
+      if (Array.isArray(res.data)) {
+        result = res.data.join(' ');
+      } else if (typeof res.data === 'string') {
+        result = res.data;
+      }
+      if (result && result.trim().length > 0) {
+        return { text: decodeHtmlEntities(result.trim()), detectedLang: sl, engine: 'google_clients5' };
+      }
+    }
+  } catch (e) {
+    // keyingi variantga o'tish
+  }
+
+  // 2. Google GTX / Single API
+  try {
+    const res = await axios.get('https://translate.googleapis.com/translate_a/single', {
+      params: { client: 'dict-chrome-ex', sl, tl, dt: 't', q: text },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+        'Accept': '*/*'
+      },
+      timeout: 7000
+    });
+    if (res.data && res.data[0]) {
+      const translated = res.data[0].map(item => item && item[0] ? item[0] : '').filter(Boolean).join('');
+      const detected = (res.data[2] && typeof res.data[2] === 'string') ? res.data[2] : sl;
+      if (translated && translated.trim().length > 0) {
+        return { text: decodeHtmlEntities(translated.trim()), detectedLang: detected, engine: 'google_gtx' };
+      }
+    }
+  } catch (e) {
+    // keyingi variantga o'tish
+  }
+
+  // 3. MyMemory Bepul API (Fallback)
+  try {
+    const fromLang = (sl === 'auto' || !sl) ? 'uz' : sl;
+    const res = await axios.get('https://api.mymemory.translated.net/get', {
+      params: {
+        q: text.slice(0, 1000),
+        langpair: `${fromLang}|${tl}`,
+        de: `tarjimon_user_${Date.now().toString().slice(-4)}@gmail.com`
+      },
+      timeout: 8000
+    });
+    const result = res.data?.responseData?.translatedText;
+    if (result && !result.includes('MYMEMORY WARNING') && result.trim().length > 0) {
+      return { text: decodeHtmlEntities(result.trim()), detectedLang: fromLang, engine: 'mymemory' };
+    }
+  } catch (e) {
+    // xatolik
+  }
+
+  throw new Error('Tarjima xizmatlari javob bermadi');
+}
+
+// Mashhur tillar nomlari va bayroqlari
+const LANG_NAMES = {
+  'auto': '🌐 Avtomatik',
+  'uz': '🇺🇿 O\'zbekcha',
+  'en': '🇬🇧 Inglizcha',
+  'ru': '🇷🇺 Ruscha',
+  'tr': '🇹🇷 Turkcha',
+  'ar': '🇸🇦 Arabcha',
+  'ko': '🇰🇷 Koreyscha',
+  'de': '🇩🇪 Nemischa',
+  'zh': '🇨🇳 Xitoycha',
+  'fr': '🇫🇷 Fransuzcha',
+  'es': '🇪🇸 Ispancha',
+  'it': '🇮🇹 Italyancha',
+  'ja': '🇯🇵 Yaponcha',
+  'kk': '🇰🇿 Qozoqcha',
+  'ky': '🇰🇬 Qirg\'izcha',
+  'tg': '🇹🇯 Tojikcha',
+  'fa': '🇮🇷 Forscha',
+  'hi': '🇮🇳 Hindcha'
+};
+
+function getModeTitle(mode) {
+  if (!mode) return '🌐 Avtomatik ➡️ 🇺🇿 O\'zbekcha';
+  const [s, t] = mode.split('_');
+  const sTitle = LANG_NAMES[s] || s;
+  const tTitle = LANG_NAMES[t] || t;
+  return `${sTitle} ➡️ ${tTitle}`;
+}
+
+function getMainKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('🌐 Avto ➡️ 🇺🇿 O\'zbek', 'set_auto_uz'),
+      Markup.button.callback('🌐 Avto ➡️ 🇬🇧 Ingliz', 'set_auto_en')
+    ],
+    [
+      Markup.button.callback('🇺🇿 O\'zbek ➡️ 🇬🇧 Ingliz', 'set_uz_en'),
+      Markup.button.callback('🇬🇧 Ingliz ➡️ 🇺🇿 O\'zbek', 'set_en_uz')
+    ],
+    [
+      Markup.button.callback('🇺🇿 O\'zbek ➡️ 🇷🇺 Rus', 'set_uz_ru'),
+      Markup.button.callback('🇷🇺 Rus ➡️ 🇺🇿 O\'zbek', 'set_ru_uz')
+    ],
+    [
+      Markup.button.callback('🇺🇿 O\'zbek ➡️ 🇹🇷 Turk', 'set_uz_tr'),
+      Markup.button.callback('🇹🇷 Turk ➡️ 🇺🇿 O\'zbek', 'set_tr_uz')
+    ],
+    [
+      Markup.button.callback('🇺🇿 O\'zbek ➡️ 🇸🇦 Arab', 'set_uz_ar'),
+      Markup.button.callback('🇺🇿 O\'zbek ➡️ 🇰🇷 Koreys', 'set_uz_ko')
+    ],
+    [
+      Markup.button.callback('🌐 Barcha Tillar Ro\'yxati', 'more_langs')
+    ]
+  ]);
+}
+
+function getMoreLangsKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('🇺🇿 ➡️ 🇩🇪 Nemis', 'set_uz_de'),
+      Markup.button.callback('🇺🇿 ➡️ 🇨🇳 Xitoy', 'set_uz_zh')
+    ],
+    [
+      Markup.button.callback('🇺🇿 ➡️ 🇫🇷 Fransuz', 'set_uz_fr'),
+      Markup.button.callback('🇺🇿 ➡️ 🇪🇸 Ispan', 'set_uz_es')
+    ],
+    [
+      Markup.button.callback('🇺🇿 ➡️ 🇰🇿 Qozoq', 'set_uz_kk'),
+      Markup.button.callback('🇺🇿 ➡️ 🇰🇬 Qirg\'iz', 'set_uz_ky')
+    ],
+    [
+      Markup.button.callback('🇺🇿 ➡️ 🇹🇯 Tojik', 'set_uz_tg'),
+      Markup.button.callback('🇺🇿 ➡️ 🇯🇵 Yapon', 'set_uz_ja')
+    ],
+    [
+      Markup.button.callback('🔙 Asosiy tillar', 'back_main_langs')
+    ]
+  ]);
+}
+
 module.exports = {
   id: 'translator',
   name: '🌐 Tarjimon Boti',
-  description: 'Matnlarni O\'zbek, Rus, Ingliz, Turk tillariga bir zumda tarjima qiluvchi aqlli bot',
+  description: 'Matnlarni O\'zbek, Rus, Ingliz, Turk, Arab va boshqa 30+ tillarga bir zumda sifatli tarjima qiluvchi aqlli bot',
   icon: '🌐',
   setupBot: (bot, botRecord, db) => {
-    const userModes = {}; // userId -> 'uz-en', 'en-uz', 'uz-ru', 'ru-uz'
-
-    const langKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('🇺🇿 O\'zbekcha ➡️ 🇬🇧 Inglizcha', 'lang_uz_en'), Markup.button.callback('🇬🇧 Inglizcha ➡️ 🇺🇿 O\'zbekcha', 'lang_en_uz')],
-      [Markup.button.callback('🇺🇿 O\'zbekcha ➡️ 🇷🇺 Ruscha', 'lang_uz_ru'), Markup.button.callback('🇷🇺 Ruscha ➡️ 🇺🇿 O\'zbekcha', 'lang_ru_uz')],
-      [Markup.button.callback('🇺🇿 O\'zbekcha ➡️ 🇹🇷 Turkcha', 'lang_uz_tr'), Markup.button.callback('🇹🇷 Turkcha ➡️ 🇺🇿 O\'zbekcha', 'lang_tr_uz')]
-    ]);
+    // userModes: userId -> 'auto_uz', 'uz_en', etc.
+    const userModes = {};
 
     bot.command('start', async (ctx) => {
-      db.updateBotData(botRecord.id, (b) => {
-        b.stats.users_count = (b.stats.users_count || 0) + 1;
-      });
+      try {
+        db.updateBotData(botRecord.id, (b) => {
+          b.stats = b.stats || {};
+          b.stats.users_count = (b.stats.users_count || 0) + 1;
+        });
+      } catch (e) {}
 
-      userModes[ctx.from.id] = userModes[ctx.from.id] || 'uz_en';
+      const mode = userModes[ctx.from.id] || 'auto_uz';
+      userModes[ctx.from.id] = mode;
+
+      const userName = escapeHtml(ctx.from.first_name || 'Foydalanuvchi');
+      const botName = escapeHtml(botRecord.bot_first_name || 'Tarjimon Bot');
 
       await ctx.reply(
-        `👋 Assalomu alaykum, *${ctx.from.first_name}*!\n\n` +
-        `🌐 *${botRecord.bot_first_name}* xush kelibsiz!\n\n` +
-        `Matn yuboring, men uni darhol tarjima qilib beraman.\n` +
-        `Hozirgi tarjima yo'nalishi: *🇺🇿 O'zbekcha ➡️ 🇬🇧 Inglizcha*\n\n` +
-        `Yo'nalishni o'zgartirish uchun quyidagi tugmalardan birini bosing:`,
-        { parse_mode: 'Markdown', ...langKeyboard }
+        `👋 Assalomu alaykum, <b>${userName}</b>!\n\n` +
+        `🌐 <b>${botName}</b>ga xush kelibsiz!\n\n` +
+        `📝 Menga istalgan tildagi matn yuboring, uni darhol aniq va tushunarli qilib tarjima qilib beraman.\n\n` +
+        `⚙️ <b>Hozirgi yo'nalish:</b>\n👉 <code>${getModeTitle(mode)}</code>\n\n` +
+        `👇 Tarjima yo'nalishini quyidagi tugmalar orqali tanlashingiz mumkin:`,
+        { parse_mode: 'HTML', ...getMainKeyboard() }
       );
     });
 
-    bot.action(/lang_(.*)/, async (ctx) => {
-      const mode = ctx.match[1];
-      userModes[ctx.from.id] = mode;
-      await ctx.answerCbQuery('✅ Tarjima yo\'nalishi o\'zgartirildi!');
-      
-      const labels = {
-        'uz_en': '🇺🇿 O\'zbekcha ➡️ 🇬🇧 Inglizcha',
-        'en_uz': '🇬🇧 Inglizcha ➡️ 🇺🇿 O\'zbekcha',
-        'uz_ru': '🇺🇿 O\'zbekcha ➡️ 🇷🇺 Ruscha',
-        'ru_uz': '🇷🇺 Ruscha ➡️ 🇺🇿 O\'zbekcha',
-        'uz_tr': '🇺🇿 O\'zbekcha ➡️ 🇹🇷 Turkcha',
-        'tr_uz': '🇹🇷 Turkcha ➡️ 🇺🇿 O\'zbekcha'
-      };
-
-      await ctx.reply(`🔄 Yangi yo'nalish: *${labels[mode] || mode}*\nEndi matn yuboring!`, { parse_mode: 'Markdown' });
+    bot.command('help', async (ctx) => {
+      await ctx.reply(
+        `ℹ️ <b>Tarjimon Boti qo'llanmasi:</b>\n\n` +
+        `1️⃣ Botga istalgan tilda so'z yoki matn yuboring.\n` +
+        `2️⃣ Bot uni bir zumda belgilangan tilga tarjima qiladi.\n` +
+        `3️⃣ <b>🌐 Avto ➡️ O'zbek</b> rejimida bot tilni o'zi aniqlab o'zbekchaga o'giradi.\n` +
+        `4️⃣ Yo'nalishni o'zgartirish uchun /start yoki quyidagi tugmalardan foydalaning.`,
+        { parse_mode: 'HTML', ...getMainKeyboard() }
+      );
     });
 
-    bot.on('text', async (ctx) => {
-      const text = ctx.message.text;
-      if (text.startsWith('/')) return;
+    bot.action(/set_(.*)/, async (ctx) => {
+      const mode = ctx.match[1];
+      userModes[ctx.from.id] = mode;
+      await ctx.answerCbQuery('✅ Yo\'nalish tanlandi!');
 
-      const mode = userModes[ctx.from.id] || 'uz_en';
-      const [source, target] = mode.split('_');
+      const title = getModeTitle(mode);
+      await ctx.reply(
+        `🔄 <b>Yangi tarjima yo'nalishi o'rnatildi:</b>\n👉 <code>${title}</code>\n\n✍️ Endi tarjima qilmoqchi bo'lgan matningizni yuboring!`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⚙️ Tillar menyusini ochish', 'open_lang_menu')]
+          ])
+        }
+      );
+    });
+
+    bot.action('more_langs', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.editMessageText(
+        `🌐 <b>Qo'shimcha tillar ro'yxati:</b>\n\nKerakli tarjima yo'nalishini tanlang:`,
+        { parse_mode: 'HTML', ...getMoreLangsKeyboard() }
+      );
+    });
+
+    bot.action('back_main_langs', async (ctx) => {
+      await ctx.answerCbQuery();
+      const currentMode = userModes[ctx.from.id] || 'auto_uz';
+      await ctx.editMessageText(
+        `🌐 <b>Asosiy tarjima yo'nalishlari:</b>\n\nHozirgi: <code>${getModeTitle(currentMode)}</code>\n\nKerakli yo'nalishni tanlang:`,
+        { parse_mode: 'HTML', ...getMainKeyboard() }
+      );
+    });
+
+    bot.action('open_lang_menu', async (ctx) => {
+      await ctx.answerCbQuery();
+      const currentMode = userModes[ctx.from.id] || 'auto_uz';
+      await ctx.reply(
+        `🌐 <b>Tarjima yo'nalishini tanlang:</b>\n\nHozirgi yo'nalish: <code>${getModeTitle(currentMode)}</code>`,
+        { parse_mode: 'HTML', ...getMainKeyboard() }
+      );
+    });
+
+    // Teskari almashtirish (Swap)
+    bot.action(/swap_(.*)/, async (ctx) => {
+      const currentMode = ctx.match[1];
+      let newMode = 'auto_uz';
+      const [s, t] = currentMode.split('_');
+      if (s === 'auto') {
+        newMode = t === 'uz' ? 'uz_en' : `auto_uz`;
+      } else {
+        newMode = `${t}_${s}`;
+      }
+      userModes[ctx.from.id] = newMode;
+      await ctx.answerCbQuery('🔁 Yo\'nalish teskarisiga almashtirildi!');
+      await ctx.reply(
+        `🔁 <b>Yo'nalish almashtirildi:</b>\n👉 <code>${getModeTitle(newMode)}</code>\n\nEndi matn yuborishingiz mumkin!`,
+        { parse_mode: 'HTML' }
+      );
+    });
+
+    // Ovozli tinglash (TTS audio)
+    bot.action(/tts_(.*)_(.*)/, async (ctx) => {
+      await ctx.answerCbQuery('🔊 Ovoz yuklanmoqda...');
+      try {
+        const lang = ctx.match[1];
+        const textToSpeak = decodeURIComponent(ctx.match[2]);
+        const cleanText = textToSpeak.slice(0, 200);
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encodeURIComponent(cleanText)}`;
+
+        await ctx.replyWithVoice(
+          { url: ttsUrl },
+          { caption: `🔊 <i>Talaffuz (${LANG_NAMES[lang] || lang})</i>`, parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        await ctx.reply('⚠️ Ovozli talaffuzni yuklab bo\'lmadi.');
+      }
+    });
+
+    // Matn kelganda tarjima qilish
+    bot.on('text', async (ctx) => {
+      const rawText = ctx.message.text;
+      if (rawText.startsWith('/')) return;
+
+      const currentMode = userModes[ctx.from.id] || 'auto_uz';
+      const [sourceLang, targetLang] = currentMode.split('_');
 
       await ctx.sendChatAction('typing');
 
       try {
-        // MyMemory bepul tarjima API si
-        const res = await axios.get(`https://api.mymemory.translated.net/get`, {
-          params: {
-            q: text,
-            langpair: `${source}|${target}`
-          },
-          timeout: 10000
-        });
+        const res = await translateWithEngines(rawText, sourceLang, targetLang);
+        const translatedText = res.text;
+        const detected = res.detectedLang || sourceLang;
+        const fromTitle = LANG_NAMES[detected] || LANG_NAMES[sourceLang] || detected;
+        const toTitle = LANG_NAMES[targetLang] || targetLang;
 
-        const translated = res.data?.responseData?.translatedText || 'Tarjima qilib bo\'lmadi';
+        // Statistika
+        try {
+          db.updateBotData(botRecord.id, (b) => {
+            b.stats = b.stats || {};
+            b.stats.messages_count = (b.stats.messages_count || 0) + 1;
+          });
+        } catch (e) {}
+
+        const swapTargetMode = `${targetLang}_${sourceLang === 'auto' ? 'uz' : sourceLang}`;
+        const encodedShortText = encodeURIComponent(translatedText.slice(0, 120));
+
+        const replyKeyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.callback(`🔁 Teskari o'girish`, `swap_${currentMode}`),
+            Markup.button.callback('🔊 Ovozli tinglash', `tts_${targetLang}_${encodedShortText}`)
+          ],
+          [
+            Markup.button.callback('⚙️ Yo\'nalishni o\'zgartirish', 'open_lang_menu')
+          ]
+        ]);
+
+        const responseMessage = 
+          `🌐 <b>Tarjima (${fromTitle} ➡️ ${toTitle}):</b>\n\n` +
+          `<code>${escapeHtml(translatedText)}</code>`;
+
+        if (responseMessage.length > 4000) {
+          // Uzun xabarlarni bo'lib yuborish
+          await ctx.reply(`🌐 <b>Tarjima natijasi:</b>`, { parse_mode: 'HTML' });
+          for (let i = 0; i < translatedText.length; i += 3800) {
+            await ctx.reply(escapeHtml(translatedText.slice(i, i + 3800)));
+          }
+          await ctx.reply(`⚙️ Boshqaruv tugmalari:`, replyKeyboard);
+        } else {
+          await ctx.reply(responseMessage, {
+            parse_mode: 'HTML',
+            ...replyKeyboard
+          });
+        }
+      } catch (err) {
+        console.error('Tarjima xatosi:', err.message);
         await ctx.reply(
-          `🌐 *Tarjima:* \n\n${translated}`,
+          `⚠️ <b>Kechirasiz, tarjima qilishda xatolik yuz berdi.</b>\n\n` +
+          `Iltimos, qayta urinib ko'ring yoki tarjima yo'nalishini almashtirib ko'ring.`,
           {
-            parse_mode: 'Markdown',
+            parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-              [Markup.button.callback('🔄 Yo\'nalishni o\'zgartirish', 'change_lang_prompt')]
+              [Markup.button.callback('🔄 Yo\'nalishni yangilash', 'open_lang_menu')]
             ])
           }
         );
-      } catch (err) {
-        await ctx.reply(`⚠️ Tarjimada xatolik yuz berdi. Iltimos qayta urinib ko'ring.`);
       }
     });
 
-    bot.action('change_lang_prompt', async (ctx) => {
-      await ctx.answerCbQuery();
-      await ctx.reply('Tarjima yo\'nalishini tanlang:', langKeyboard);
-    });
-
+    // Admin buyrug'i
     bot.command('admin', async (ctx) => {
       if (ctx.from.id !== botRecord.owner_id && !db.isAdmin(ctx.from.id)) {
         return ctx.reply('⛔ Siz bu botning egasi emassiz.');
       }
-      await ctx.reply(`👑 *Tarjimon Boti — Admin Paneli*\n\nBot barqaror ishlamoqda.`, { parse_mode: 'Markdown' });
+      const stats = botRecord.stats || {};
+      const users = stats.users_count || 0;
+      const msgs = stats.messages_count || 0;
+
+      await ctx.reply(
+        `👑 <b>Tarjimon Boti — Admin Paneli</b>\n\n` +
+        `📊 <b>Statistika:</b>\n` +
+        `👥 Foydalanuvchilar soni: <b>${users}</b> ta\n` +
+        `💬 Bajarilgan tarjimalar: <b>${msgs}</b> ta\n` +
+        `⚡ Holat: <b>Faol (100% Onlayn)</b>\n` +
+        `🚀 Tarjima dvigatellari: <b>Google Translate v2 + Web Engine + MyMemory</b>`,
+        { parse_mode: 'HTML' }
+      );
     });
   }
 };
 
+
 });
-defineModule('templates/translator', _modules['templates/translator.js']);
 
 // ---- FILE: templates/weather.js ----
 defineModule('templates/weather.js', function(exports, module, require) {
@@ -2952,7 +4774,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/weather', _modules['templates/weather.js']);
 
 // ---- FILE: templates/index.js ----
 defineModule('templates/index.js', function(exports, module, require) {
@@ -3006,7 +4827,6 @@ module.exports = {
 };
 
 });
-defineModule('templates/index', _modules['templates/index.js']);
 
 // ---- FILE: core/botManager.js ----
 defineModule('core/botManager.js', function(exports, module, require) {
@@ -3149,7 +4969,151 @@ class BotManager {
 module.exports = new BotManager();
 
 });
-defineModule('core/botManager', _modules['core/botManager.js']);
+
+// ---- FILE: core/subscriptionChecker.js ----
+defineModule('core/subscriptionChecker.js', function(exports, module, require) {
+const db = require('../database/db');
+const botManager = require('./botManager');
+const keyboards = require('./keyboards');
+const config = require('../config');
+const { Markup } = require('telegraf');
+
+class SubscriptionChecker {
+  constructor() {
+    this.mainBot = null;
+    this.interval = null;
+  }
+
+  init(mainBot) {
+    this.mainBot = mainBot;
+    // Har 2 daqiqada barcha foydalanuvchilarning obunasini tekshirib turadi
+    this.interval = setInterval(() => this.checkAllUsers(), 2 * 60 * 1000);
+    // Dastlabki tekshiruv 10 soniyadan so'ng
+    setTimeout(() => this.checkAllUsers(), 10 * 1000);
+  }
+
+  async checkAllUsers() {
+    if (!this.mainBot) return;
+
+    try {
+      const allUsers = db.getAllUsers();
+      const now = new Date();
+
+      for (const user of allUsers) {
+        // Admin va Ownerlarni tekshirmaymiz (cheksiz ruxsat)
+        if (db.isAdmin(user.id)) continue;
+        if (!user.subscription_ends_at) continue;
+
+        const endAt = new Date(user.subscription_ends_at);
+        const diffMs = endAt.getTime() - now.getTime();
+        const diffHours = diffMs / (1000 * 60 * 60);
+
+        // 1. Agar obuna muddatiga 5 soat yoki undan kam vaqt qolgan bo'lsa (0 < diffMs <= 5 soat)
+        if (diffMs > 0 && diffHours <= 5) {
+          if (!user.notified_5h) {
+            await this.send5HoursWarning(user, diffMs);
+            user.notified_5h = true;
+            db.save();
+          }
+        }
+
+        // 2. Agar obuna muddati to'liq tugagan bo'lsa (diffMs <= 0)
+        if (diffMs <= 0) {
+          if (!user.notified_expired) {
+            await this.handleExpiredUser(user);
+            user.notified_expired = true;
+            user.notified_5h = true; // 5h xabarini qayta yubormaslik uchun
+            db.save();
+          }
+        }
+
+        // 3. Agar foydalanuvchi obunasini yangilagan bo'lsa (> 5 soat qolgan)
+        if (diffHours > 5) {
+          if (user.notified_5h || user.notified_expired) {
+            user.notified_5h = false;
+            user.notified_expired = false;
+            db.save();
+          }
+        }
+      }
+    } catch (err) {
+      console.error('SubscriptionChecker xatolik:', err.message);
+    }
+  }
+
+  async send5HoursWarning(user, diffMs) {
+    try {
+      const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
+      const hoursLeft = Math.floor(minutesLeft / 60);
+      const remMins = minutesLeft % 60;
+      const timeLeftStr = hoursLeft > 0 ? `${hoursLeft} soat ${remMins} daqiqa` : `${remMins} daqiqa`;
+
+      const userBots = db.getUserBots(user.id);
+      const botNames = userBots.length > 0 
+        ? userBots.map(b => `@${b.bot_username}`).join(', ')
+        : 'Botlaringiz';
+
+      const text = 
+        `⚠️ *DIQQAT: OBUNA MUDDATINGIZ TUGAMOQDA!*\n\n` +
+        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning botingiz uchun berilgan muddat **5 SOATDAN SO'NG TUGAYDI!**\n\n` +
+        `⏱ Qolgan vaqt: *${timeLeftStr}*\n` +
+        `🤖 Botingiz: *${botNames}*\n\n` +
+        `⚠️ *Agar obunani uzaytirmasangiz, muddat tugashi bilan botingiz faoliyati avtomatik ravishda TO'XTATILADI (O'CHIRILADI)!*\n\n` +
+        `Botlaringiz 24/7 uzluksiz va to'xtovsiz ishlashini ta'minlash uchun iltimos, hoziroq tarif sotib oling yoki hisobingizni to'ldiring! 👇`;
+
+      await this.mainBot.telegram.sendMessage(user.id, text, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💎 Tariflar va To\'lov Qilish', 'tariff_view_all')],
+          [Markup.button.callback('📁 Mening Botlarim', 'my_bots_list')]
+        ])
+      });
+      console.log(`📢 [Ogohlantirish] ID: ${user.id} ga 5 soatlik obuna ogohlantirishi yuborildi.`);
+    } catch (err) {
+      console.error(`Foydalanuvchiga (ID: ${user.id}) 5h ogohlantirish yuborishda xatolik:`, err.message);
+    }
+  }
+
+  async handleExpiredUser(user) {
+    try {
+      const userBots = db.getUserBots(user.id);
+      let stoppedCount = 0;
+
+      for (const b of userBots) {
+        if (b.status === 'running' || botManager.isBotRunning(b.id)) {
+          await botManager.stopBot(b.id);
+          db.updateBotStatus(b.id, 'stopped');
+          stoppedCount++;
+        }
+      }
+
+      const botNames = userBots.length > 0 
+        ? userBots.map(b => `@${b.bot_username}`).join(', ')
+        : 'Botlaringiz';
+
+      const text = 
+        `⛔ *OBUNA MUDDATINGIZ TUGADI!*\n\n` +
+        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning 7 kunlik sinov (yoki tarif) obuna muddatingiz to'liq yakunlandi.\n\n` +
+        `🛑 Barcha botlaringiz (*${botNames}*) faoliyati avtomatik ravishda **TO'XTATILDI**.\n\n` +
+        `🚀 Botlaringizni darhol qayta yoqish va 24/7 cheklovlarsiz ishlatish uchun quyidagi tugma orqali o'zingizga qulay tarifni tanlang va to'lov qiling!`;
+
+      await this.mainBot.telegram.sendMessage(user.id, text, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💎 Obunani Yangilash / Tariflar', 'tariff_view_all')],
+          [Markup.button.callback('👤 Profilim', 'profile_view')]
+        ])
+      });
+      console.log(`🛑 [Muddat Tugadi] ID: ${user.id} ning ${stoppedCount} ta boti to'xtatildi va xabar yuborildi.`);
+    } catch (err) {
+      console.error(`Foydalanuvchiga (ID: ${user.id}) muddat tugaganini yuborishda xatolik:`, err.message);
+    }
+  }
+}
+
+module.exports = new SubscriptionChecker();
+
+});
 
 // ---- FILE: handlers/adminHandlers.js ----
 defineModule('handlers/adminHandlers.js', function(exports, module, require) {
@@ -3171,15 +5135,17 @@ module.exports = (bot) => {
     }
 
     const isOwner = db.isOwner(ctx.from.id);
+    const isPublic = db.isWebappPublic();
     const stats = db.getStats();
 
     await ctx.reply(
       `👑 *Asosiy Administrator Paneli*\n\n` +
-      `Sizning maqomingiz: *${isOwner ? '👑 Bosh Admin (Ega)' : '🛡 Yordamchi Admin'}*\n\n` +
+      `Sizning maqomingiz: *${isOwner ? '👑 Bosh Admin (Ega)' : '🛡 Yordamchi Admin'}*\n` +
+      `Web App holati: *${isPublic ? '🟢 Hamma uchun ochiq (ON)' : '🔴 Faqat admin uchun (OFF)'}*\n\n` +
       `Quyidagi boshqaruv bo'limlaridan birini tanlang:`,
       {
         parse_mode: 'Markdown',
-        ...keyboards.getAdminKeyboard(isOwner)
+        ...keyboards.getAdminKeyboard(isOwner, isPublic, ctx.from.id)
       }
     );
   };
@@ -3187,8 +5153,79 @@ module.exports = (bot) => {
   bot.hears('👑 Admin Panel', openAdminPanel);
   bot.command('admin', openAdminPanel);
 
+  // Web App ON/OFF almashtirish
+  bot.action('admin_toggle_webapp', async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    const newStatus = db.toggleWebappPublic();
+    const isOwner = db.isOwner(ctx.from.id);
+
+    await ctx.answerCbQuery(
+      newStatus ? '🟢 Web App barcha foydalanuvchilar uchun yoqildi!' : '🔴 Web App faqat adminlar uchun belgilandi!'
+    );
+
+    try {
+      await ctx.editMessageText(
+        `👑 *Asosiy Administrator Paneli*\n\n` +
+        `Sizning maqomingiz: *${isOwner ? '👑 Bosh Admin (Ega)' : '🛡 Yordamchi Admin'}*\n` +
+        `Web App holati: *${newStatus ? '🟢 Hamma uchun ochiq (ON)' : '🔴 Faqat admin uchun (OFF)'}*\n\n` +
+        `Quyidagi boshqaruv bo'limlaridan birini tanlang:`,
+        {
+          parse_mode: 'Markdown',
+          ...keyboards.getAdminKeyboard(isOwner, newStatus, ctx.from.id)
+        }
+      );
+    } catch (e) {}
+  });
+
+  // Yangilanishlar tarixi (Faqat Ega / Adminlar uchun)
+  const showUpdatesInfo = async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    if (ctx.callbackQuery) await ctx.answerCbQuery();
+
+    const updatesText = 
+      `✨ *BOT KONSTRUKTORI — SO'NGGI YANGILANISHLAR (v2.5)*\n\n` +
+      `Hurmatli Bot Egasi, botingizga quyidagi barcha yangi funksiyalar va yaxshilanishlar qo'shildi:\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🌐 *1. TELEGRAM WEB APP (MINI APP) BOSHQARUV:* \n` +
+      `• *Mijoz Botlari Nazorati:* Barcha yaratilgan botlar, ularning faolligi, foydalanuvchilar va xabarlar soni.\n` +
+      `• *🔑 Tokenlar Boshqaruvi:* Tokenlarni ko'rish/yashirish va bitta bosishda nusxalash (\`📋 Nusxalash\`).\n` +
+      `• *👤 Mijozlar Ma'lumotlari:* Mijoz ID si, username, amaldagi tarifi, obunaning qolgan kunlari.\n` +
+      `• *⚡ Tezkor Boshqaruv:* Botlarni to'xtatish (\`⏹\`), ishga tushirish (\`▶️\`) va o'chirish (\`🗑\`).\n` +
+      `• *🔍 Qidiruv va Filtr:* Bot nomi, username, mijoz yoki token bo'yicha qidirish.\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━\n` +
+      `⚙️ *2. WEB APP ON / OFF REJIMI:* \n` +
+      `• *🟢 ON (Hamma ko'radi):* Barcha mijozlar Web App orqali o'z shaxsiy kabinetlarini ko'ra olishadi.\n` +
+      `• *🔴 OFF (Faqat Admin):* Web App oddiy foydalanuvchilarga yopiladi va faqat bot egasi va adminlarga ko'rinadi.\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🌐 *3. TARJIMON BOTI (TUBDAN YANGILANDI):* \n` +
+      `• *Google Web Engine:* Bepul, cheklovlarsiz va tezkor tarjima dvigateli.\n` +
+      `• *30+ Xalqaro Tillar:* O'zbek, Rus, Ingliz, Turk, Arab, Koreys, Nemis, Xitoy, Fransuz, Ispan va h.k.\n` +
+      `• *🌐 Avto-Aniqlash:* Yuborilgan matn tilini avtomatik aniqlab o'zbekchaga o'girish.\n` +
+      `• *🔁 Swap Tugmasi:* Bitta bosish bilan tillarni teskari almashtirish.\n` +
+      `• *🔊 Ovozli Talaffuz (TTS):* Tarjima qilingan so'zlarning to'g'ri talaffuzini eshitish.\n` +
+      `• *🛡 HTML Format:* Maxsus belgilar tufayli xabar buzilishi to'liq bartaraf etildi.\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━\n` +
+      `⚡ *4. TIZIM VA HOSTING 24/7:* \n` +
+      `• Ziddiyatli Render bot instansiyalari to'xtatildi, 409 Conflict xatolari yo'qotildi.\n` +
+      `• Tizim maksimal tezlik va xavfsizlik bilan 24/7 rejimda ishlamoqda!`;
+
+    await ctx.reply(updatesText, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('⬅️ Admin menyuga qaytish', 'admin_back')]
+      ])
+    });
+  };
+
+  bot.action('admin_updates_info', showUpdatesInfo);
+  bot.hears('✨ Yangilanishlar', showUpdatesInfo);
+  bot.hears('🔄 Yangilanishlar', showUpdatesInfo);
+  bot.hears('Yangilanishlar', showUpdatesInfo);
+
+
   // Statistika
   bot.action('admin_stats', async (ctx) => {
+
     if (!db.isAdmin(ctx.from.id)) return;
     await ctx.answerCbQuery();
 
@@ -3213,6 +5250,7 @@ module.exports = (bot) => {
       ])
     });
   });
+
 
   // Mijoz botlari ro'yxati
   bot.action('admin_bots', async (ctx) => {
@@ -3409,6 +5447,110 @@ module.exports = (bot) => {
     );
   });
 
+  // Foydalanuvchilar (Mijozlar) ro'yxati
+  bot.action('admin_users', async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    await ctx.answerCbQuery();
+
+    const allUsers = db.getAllUsers();
+    if (allUsers.length === 0) {
+      return ctx.reply('Tizimda hali foydalanuvchilar mavjud emas.');
+    }
+
+    let msg = `👥 *Barcha Foydalanuvchilar (${allUsers.length} ta):*\n\n`;
+    allUsers.slice(-20).forEach((u, i) => {
+      const tariff = config.TARIFFS[u.tariff] || { name: u.tariff || 'Standart' };
+      const days = db.getSubscriptionDaysLeft(u.id);
+      msg += `${i + 1}. *${cleanName(u.first_name)}* ${u.username ? '(@' + u.username + ')' : ''}\n` +
+        `   🆔 ID: \`${u.id}\`\n` +
+        `   💰 Balans: *${(u.balance || 0).toLocaleString()} so'm*\n` +
+        `   💎 Tarif: *${tariff.name}* (${days} kun qoldi)\n\n`;
+    });
+
+    msg += `💡 *Tezkor Balans Boshqaruvi Buyruqlari:*\n` +
+      `• Pul qo'shish: \`/add_money <ID> <summa>\`\n` +
+      `• Pul ayirish: \`/sub_money <ID> <summa>\`\n` +
+      `• Kun qo'shish: \`/add_days <ID> <kun>\`\n` +
+      `• Tarif berish: \`/set_tariff <ID> <pro_month/vip_year/...>\`\n\n` +
+      `_Yoki to'liq vizual boshqaruv uchun Web App dan foydalaning._`;
+
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.webApp('🌐 Web App orqali boshqarish', keyboards.getWebAppUrl(ctx.from.id))],
+        [Markup.button.callback('⬅️ Admin menyuga qaytish', 'admin_back')]
+      ])
+    });
+  });
+
+  // Tezkor buyruq: /add_money <ID> <summa>
+  bot.command(['add_money', 'add_balance', 'pul_qoshish'], async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ').filter(Boolean);
+    if (parts.length < 3) {
+      return ctx.reply('ℹ️ Ishlatish: `/add_money <User_ID> <Summa>`\nMisol: `/add_money 8422157752 50000`', { parse_mode: 'Markdown' });
+    }
+    const targetId = parts[1];
+    const amount = parseFloat(parts[2]);
+    if (isNaN(amount) || amount <= 0) return ctx.reply('❌ Noto\'g\'ri summa kiritildi.');
+
+    const newBal = db.addBalance(targetId, amount);
+    if (newBal === false) return ctx.reply('❌ Foydalanuvchi topilmadi.');
+
+    await ctx.reply(`✅ ID: \`${targetId}\` ga *${amount.toLocaleString()} so'm* qo'shildi!\nYangi balansi: *${newBal.toLocaleString()} so'm*`, { parse_mode: 'Markdown' });
+  });
+
+  // Tezkor buyruq: /sub_money <ID> <summa>
+  bot.command(['sub_money', 'sub_balance', 'pul_ayirish'], async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ').filter(Boolean);
+    if (parts.length < 3) {
+      return ctx.reply('ℹ️ Ishlatish: `/sub_money <User_ID> <Summa>`\nMisol: `/sub_money 8422157752 20000`', { parse_mode: 'Markdown' });
+    }
+    const targetId = parts[1];
+    const amount = parseFloat(parts[2]);
+    if (isNaN(amount) || amount <= 0) return ctx.reply('❌ Noto\'g\'ri summa kiritildi.');
+
+    const newBal = db.subtractBalance(targetId, amount);
+    if (newBal === false) return ctx.reply('❌ Foydalanuvchi topilmadi.');
+
+    await ctx.reply(`➖ ID: \`${targetId}\` dan *${amount.toLocaleString()} so'm* ayirildi!\nYangi balansi: *${newBal.toLocaleString()} so'm*`, { parse_mode: 'Markdown' });
+  });
+
+  // Tezkor buyruq: /add_days <ID> <kun>
+  bot.command(['add_days', 'kun_qoshish'], async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ').filter(Boolean);
+    if (parts.length < 3) {
+      return ctx.reply('ℹ️ Ishlatish: `/add_days <User_ID> <Kun>`\nMisol: `/add_days 8422157752 30`', { parse_mode: 'Markdown' });
+    }
+    const targetId = parts[1];
+    const days = parseInt(parts[2]);
+    if (isNaN(days) || days <= 0) return ctx.reply('❌ Noto\'g\'ri kun soni.');
+
+    const daysLeft = db.addDays(targetId, days);
+    if (daysLeft === false) return ctx.reply('❌ Foydalanuvchi topilmadi.');
+
+    await ctx.reply(`⏳ ID: \`${targetId}\` ga *${days} kun* qo'shildi!\nQolgan obuna muddati: *${daysLeft} kun*`, { parse_mode: 'Markdown' });
+  });
+
+  // Tezkor buyruq: /set_tariff <ID> <tariffId>
+  bot.command(['set_tariff', 'tarif_berish'], async (ctx) => {
+    if (!db.isAdmin(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ').filter(Boolean);
+    if (parts.length < 3) {
+      return ctx.reply('ℹ️ Ishlatish: `/set_tariff <User_ID> <Tarif>`\nTariflar: `starter`, `pro_month`, `business_3m`, `vip_year`, `unlimited_forever`\nMisol: `/set_tariff 8422157752 pro_month`', { parse_mode: 'Markdown' });
+    }
+    const targetId = parts[1];
+    const tariffId = parts[2];
+
+    const ok = db.setTariff(targetId, tariffId);
+    if (!ok) return ctx.reply('❌ Foydalanuvchi topilmadi.');
+
+    const tariff = config.TARIFFS[tariffId] || { name: tariffId };
+    await ctx.reply(`💎 ID: \`${targetId}\` ga *${tariff.name}* tarifi muvaffaqiyatli o'rnatildi!`, { parse_mode: 'Markdown' });
+  });
+
   // Admin menyusiga qaytish
   bot.action('admin_back', async (ctx) => {
     if (!db.isAdmin(ctx.from.id)) return;
@@ -3484,7 +5626,6 @@ module.exports = (bot) => {
 };
 
 });
-defineModule('handlers/adminHandlers', _modules['handlers/adminHandlers.js']);
 
 // ---- FILE: handlers/tariffHandlers.js ----
 defineModule('handlers/tariffHandlers.js', function(exports, module, require) {
@@ -3497,7 +5638,7 @@ module.exports = (bot) => {
   const pendingPaymentUsers = {}; // userId -> tariffId
 
   // Tariflar bo'limi
-  bot.hears('💎 Tariflar va Obuna', async (ctx) => {
+  const showTariffs = async (ctx) => {
     const user = db.getOrCreateUser(ctx.from);
     const daysLeft = db.getSubscriptionDaysLeft(ctx.from.id);
 
@@ -3538,6 +5679,12 @@ module.exports = (bot) => {
       parse_mode: 'Markdown',
       ...keyboards.getTariffsKeyboard()
     });
+  };
+
+  bot.hears('💎 Tariflar va Obuna', showTariffs);
+  bot.action('tariff_view_all', async (ctx) => {
+    await ctx.answerCbQuery();
+    await showTariffs(ctx);
   });
 
   // Tarif tanlanganda
@@ -3628,7 +5775,6 @@ module.exports = (bot) => {
 };
 
 });
-defineModule('handlers/tariffHandlers', _modules['handlers/tariffHandlers.js']);
 
 // ---- FILE: handlers/userHandlers.js ----
 defineModule('handlers/userHandlers.js', function(exports, module, require) {
@@ -3648,6 +5794,7 @@ module.exports = (bot) => {
   bot.command('start', async (ctx) => {
     const user = db.getOrCreateUser(ctx.from);
     const isAdmin = db.isAdmin(ctx.from.id);
+    const isPublic = db.isWebappPublic();
     const daysLeft = db.getSubscriptionDaysLeft(ctx.from.id);
     const name = cleanName(ctx.from.first_name);
 
@@ -3660,10 +5807,40 @@ module.exports = (bot) => {
       `Yangi bot yaratish uchun quyidagi tugmani bosing! 👇`,
       {
         parse_mode: 'Markdown',
-        ...keyboards.getMainKeyboard(isAdmin)
+        ...keyboards.getMainKeyboard(isAdmin, isPublic)
       }
     );
   });
+
+  // 🌐 Web App tugmasi
+  bot.hears('🌐 Web App', async (ctx) => {
+    const userId = ctx.from.id;
+    const isAdmin = db.isAdmin(userId);
+    const isPublic = db.isWebappPublic();
+
+    if (!isAdmin && !isPublic) {
+      return ctx.reply('🔒 *Web App hozirda faqat administratorlar uchun ochiq.*', { parse_mode: 'Markdown' });
+    }
+
+    const url = keyboards.getWebAppUrl(userId);
+    const isOwner = db.isOwner(userId);
+    const roleText = isOwner ? '👑 Bosh Admin' : (isAdmin ? '🛡 Administrator' : '👤 Mijoz Kabineti');
+
+    await ctx.reply(
+      `🌐 *Web App Dashboard Paneli*\n\n` +
+      `Maqom: *${roleText}*\n\n` +
+      `Barcha botlaringiz, tokenlar va to'liq ma'lumotlarni Telegram ichida ko'rish va boshqarish uchun quyidagi tugmani bosing:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.webApp('🚀 Web App Dashboard', url)]
+        ])
+      }
+    );
+  });
+
+
+
 
   // Yangi bot yaratish tugmasi
   bot.hears('🚀 Yangi Bot Yaratish', async (ctx) => {
@@ -4019,23 +6196,21 @@ module.exports = (bot) => {
 };
 
 });
-defineModule('handlers/userHandlers', _modules['handlers/userHandlers.js']);
 
 // ================= MAIN RUNNER ================
 const requireModule = createScopedRequire('');
 
 const { Telegraf } = require('telegraf');
-const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const config = requireModule('./config');
 const db = requireModule('./database/db');
 const botManager = requireModule('./core/botManager');
-
-const fs = require('fs');
+const subscriptionChecker = requireModule('./core/subscriptionChecker');
+const webapp = requireModule('./core/webapp');
 
 const logFile = path.join(__dirname, 'data/app.log');
 function logToFile(...args) {
-  const line = `[${new Date().toISOString()}] ` + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ') + '\n';
+  const line = '[' + new Date().toISOString() + '] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ') + '\n';
   try {
     fs.appendFileSync(logFile, line, 'utf-8');
   } catch (e) {}
@@ -4047,28 +6222,71 @@ console.log = (...args) => { origLog(...args); logToFile('[INFO]', ...args); };
 console.error = (...args) => { origErr(...args); logToFile('[ERROR]', ...args); };
 
 process.on('exit', (code) => {
-  logToFile('[EXIT]', `Jarayon to'xtadi, kod: ${code}`);
+  logToFile('[EXIT]', 'Jarayon to\'xtadi, kod: ' + code);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection ushlandi:', reason?.message || reason);
+  console.error('Unhandled Rejection ushlandi:', reason && reason.message ? reason.message : reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception ushlandi:', err?.message || err);
+  console.error('Uncaught Exception ushlandi:', err && err.message ? err.message : err);
 });
 
-// Event loopni hech qachon o'chib qolmasligi uchun doimiy yurak urishi (Keep-alive heartbeat)
 setInterval(() => {}, 30000);
 
-// Render.com va bulutli hostinglar uchun HTTP server (Port bind)
-const http = require('http');
 const PORT = process.env.PORT || 3000;
+function startDirectTunnel(port) {
+  const { spawn } = require('child_process');
+  function run() {
+    try {
+      const ssh = spawn('ssh', ['-o', 'StrictHostKeyChecking=no', '-R', '80:localhost:' + port, 'serveo.net']);
+      const handleData = (buf) => {
+        const str = buf.toString();
+        const m = str.match(/https:\/\/[a-zA-Z0-9_.-]+\.serveousercontent\.com/);
+        if (m) {
+          process.env.WEBAPP_URL = m[0];
+          console.log('🚀 Web App Jonli HTTPS Havolasi (Zero-Warning):', m[0] + '/webapp');
+        }
+      };
+      ssh.stdout.on('data', handleData);
+      ssh.stderr.on('data', handleData);
+      ssh.on('close', () => {
+        setTimeout(run, 4000);
+      });
+    } catch (e) {
+      console.log('Tunnel fallback:', e.message);
+    }
+  }
+  run();
+}
+
 http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bypass-Tunnel-Reminder');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
+
+  const handled = webapp.handleWebAppRequests(req, res);
+  if (handled !== false) return;
+
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<h1>🚀 Maker Bot Konstruktori 24/7 Online ishlamoqda!</h1><p>Status: OK</p>');
-}).listen(PORT, () => {
-  console.log(`🌐 HTTP Server ishga tushdi (Port: ${PORT}) — Render.com ga to'liq tayyor!`);
+  res.end('<h1>🚀 Maker Bot Konstruktori 24/7 Online ishlamoqda!</h1><p>Status: OK</p><p><a href="/webapp">👉 Web App Dashboard</a></p>');
+}).listen(PORT, async () => {
+  console.log('🌐 HTTP Server ishga tushdi (Port: ' + PORT + ') — Web App /webapp da faol!');
+  startDirectTunnel(PORT);
 });
+
+const https = require('https');
+const RENDER_PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || 'https://telegram-bot1-1-ivst.onrender.com';
+setInterval(() => {
+  https.get(RENDER_PUBLIC_URL, (res) => {}).on('error', () => {});
+}, 7 * 60 * 1000);
+
+
 
 async function main() {
   console.log('====================================================');
@@ -4078,22 +6296,16 @@ async function main() {
   if (!config.BOT_TOKEN || config.BOT_TOKEN === '7123456789:AAExampleTokenFromBotFather') {
     console.log('⚠️ DIQQAT: .env faylida asosiy bot tokeni (BOT_TOKEN) kiritilmagan!');
     console.log('📌 Iltimos, .env faylini oching va @BotFather dan olgan BOT_TOKEN va OWNER_ID ni yozing.');
-    console.log('👉 Misol:');
-    console.log('   BOT_TOKEN=123456789:AAHxxxxxxxxxxxxxxxxxxxx');
-    console.log('   OWNER_ID=123456789');
     console.log('====================================================');
-    console.log('Tizim token kiritilishini kutmoqda...');
     return;
   }
 
   try {
     const mainBot = new Telegraf(config.BOT_TOKEN);
 
-    // Asosiy bot ma'lumotlarini olish
     const me = await mainBot.telegram.getMe();
-    console.log(`🤖 Asosiy Bot ulandi: @${me.username} (${me.first_name})`);
+    console.log('🤖 Asosiy Bot ulandi: @' + me.username + ' (' + me.first_name + ')');
 
-    // Xavfsiz callback query va log middleware
     mainBot.use(async (ctx, next) => {
       if (ctx.callbackQuery) {
         const origAnswer = ctx.answerCbQuery.bind(ctx);
@@ -4106,13 +6318,12 @@ async function main() {
         };
       }
 
-      // Xavfsiz xabar yuborish (parse_mode Markdown xatosi bo'lsa avtomatik toza matnda yuboradi)
       const origReply = ctx.reply.bind(ctx);
       ctx.reply = async (text, extra = {}) => {
         try {
           return await origReply(text, extra);
         } catch (err) {
-          if (err.message && err.message.includes("can't parse entities")) {
+          if (err.message && (err.message.includes("can't parse entities") || err.message.includes("Bad Request: can't parse entities"))) {
             const plain = { ...extra };
             delete plain.parse_mode;
             return await origReply(text.replace(/[*_`\[\]]/g, ''), plain);
@@ -4122,33 +6333,31 @@ async function main() {
       };
 
       const u = ctx.from;
-      const text = ctx.message?.text || (ctx.callbackQuery ? `Tugma: ${ctx.callbackQuery.data}` : ctx.updateType);
-      console.log(`📩 [Xabar] @${u?.username || u?.id} (${u?.first_name}): ${text}`);
+      const text = ctx.message && ctx.message.text ? ctx.message.text : (ctx.callbackQuery ? ('Tugma: ' + ctx.callbackQuery.data) : ctx.updateType);
+      console.log('📩 [Xabar] @' + (u && (u.username || u.id)) + ' (' + (u && u.first_name) + '): ' + text);
       return next();
     });
 
-    // Handlerlarni ulash
     requireModule('./handlers/userHandlers')(mainBot);
     requireModule('./handlers/tariffHandlers')(mainBot);
     requireModule('./handlers/adminHandlers')(mainBot);
 
-    // Xatoliklarni ushlash
     mainBot.catch((err, ctx) => {
       console.error('Asosiy botda xatolik:', err.message);
     });
 
-    // Asosiy botni ishga tushirish (fondagi polling)
     mainBot.launch().catch(err => {
       console.error('Asosiy bot to\'xtatildi yoki xatolik:', err.message);
     });
     console.log('🚀 Asosiy Konstruktor Boti muvaffaqiyatli ishga tushdi!');
 
-    // Bazadagi barcha mijoz botlarini fonda ishga tushirish
+    subscriptionChecker.init(mainBot);
+    console.log('⏳ Obuna va 5 soatlik ogohlantirish xizmati (SubscriptionChecker) faollashtirildi!');
+
     await botManager.startAllActiveBots();
 
     console.log('✨ Tizim to\'liq ish holatida! Telegram orqali botingizni sinab ko\'rishingiz mumkin.');
 
-    // To'xtatish signallari
     process.once('SIGINT', () => {
       console.log('Tizim to\'xtatilmoqda (SIGINT)...');
       mainBot.stop('SIGINT');

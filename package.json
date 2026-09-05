@@ -14,6 +14,7 @@
   "dependencies": {
     "axios": "^1.20.0",
     "dotenv": "^17.4.2",
+    "localtunnel": "^2.0.2",
     "qrcode": "^1.5.4",
     "telegraf": "^4.16.3"
   },
