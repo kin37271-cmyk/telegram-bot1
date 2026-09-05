@@ -4066,6 +4066,15 @@ http.createServer((req, res) => {
   console.log(`🌐 HTTP Server ishga tushdi (Port: ${PORT}) — Render.com ga to'liq tayyor!`);
 });
 
+// Render.com tekin rejimda hech qachon uxlab qolmasligi uchun avtomatik o'z-o'zini uyg'otish (Keep-Alive Ping)
+const https = require('https');
+const RENDER_PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || 'https://telegram-bot1-1-ivst.onrender.com';
+setInterval(() => {
+  https.get(RENDER_PUBLIC_URL, (res) => {
+    // Har 7 daqiqada so'rov yuborib, Render 15 daqiqalik uyqu taymerini yangilab turadi
+  }).on('error', () => {});
+}, 7 * 60 * 1000);
+
 async function main() {
   console.log('====================================================');
   console.log('🚀 TELEGRAM BOT KONSTRUKTORI (15-IN-1 PLATFORMA)   ');
