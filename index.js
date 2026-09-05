@@ -63,13 +63,13 @@ module.exports = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
 
   // Tariflar
-  TRIAL_DAYS: 7, // 7 kunlik tekin sinov
+  TRIAL_DAYS: 3, // 3 kunlik tekin sinov
   TARIFFS: {
     free_trial: {
       id: 'free_trial',
-      name: '🎁 7 Kunlik Bepul Sinov',
+      name: '🎁 3 Kunlik Bepul Sinov',
       price: 0,
-      days: 7,
+      days: 3,
       maxBots: 1, // Tarifsiz faqat 1 ta bot yaratish limiti
       description: 'Tarif sotib olmaganlar uchun faqat 1 ta bot yaratish mumkin!'
     },
@@ -258,6 +258,7 @@ class Database {
     user.subscription_ends_at = newEnd.toISOString();
     user.notified_5h = false;
     user.notified_expired = false;
+    user.notified_deleted = false;
     this.save();
     return this.getSubscriptionDaysLeft(userId);
   }
@@ -301,6 +302,7 @@ class Database {
     user.subscription_ends_at = newEnd.toISOString();
     user.notified_5h = false;
     user.notified_expired = false;
+    user.notified_deleted = false;
     this.save();
     return true;
   }
@@ -736,7 +738,7 @@ module.exports = {
   // Tariflar inline tugmalari
   getTariffsKeyboard: () => {
     return Markup.inlineKeyboard([
-      [Markup.button.callback('🎁 7 Kunlik Bepul Sinov', 'tariff_free_trial')],
+      [Markup.button.callback('🎁 3 Kunlik Bepul Sinov', 'tariff_free_trial')],
       [Markup.button.callback('🌱 Starter (1 Oylik) — 15,000 so\'m', 'tariff_starter')],
       [Markup.button.callback('⭐ 25 Pro (1 Oylik) — 25,000 so\'m', 'tariff_pro_month')],
       [Markup.button.callback('💼 Business (3 Oylik) — 60,000 so\'m', 'tariff_business_3m')],
@@ -5017,8 +5019,9 @@ class SubscriptionChecker {
           }
         }
 
-        // 2. Agar obuna muddati to'liq tugagan bo'lsa (diffMs <= 0)
-        if (diffMs <= 0) {
+        // 2. Agar obuna muddati tugagan bo'lsa (diffMs <= 0), lekin 24 soat (8-kun) hali to'lmagan bo'lsa (-24 < diffHours <= 0)
+        // Bot to'xtaydi, lekin bazadan o'chib ketmaydi!
+        if (diffMs <= 0 && diffHours > -24) {
           if (!user.notified_expired) {
             await this.handleExpiredUser(user);
             user.notified_expired = true;
@@ -5027,11 +5030,24 @@ class SubscriptionChecker {
           }
         }
 
-        // 3. Agar foydalanuvchi obunasini yangilagan bo'lsa (> 5 soat qolgan)
+        // 3. Agar obuna tugaganiga 24 soat (1 sutka) bo'lsa (diffHours <= -24) -> Ya'ni 8-kun bo'lganda!
+        // Bot butunlay avtomatik tarzda o'chirib yuboriladi!
+        if (diffHours <= -24) {
+          if (!user.notified_deleted) {
+            await this.handleAutoDeleteUserBots(user);
+            user.notified_deleted = true;
+            user.notified_expired = true;
+            user.notified_5h = true;
+            db.save();
+          }
+        }
+
+        // 4. Agar foydalanuvchi obunasini yangilagan / tarif sotib olgan bo'lsa (> 5 soat qolgan)
         if (diffHours > 5) {
-          if (user.notified_5h || user.notified_expired) {
+          if (user.notified_5h || user.notified_expired || user.notified_deleted) {
             user.notified_5h = false;
             user.notified_expired = false;
+            user.notified_deleted = false;
             db.save();
           }
         }
@@ -5041,6 +5057,7 @@ class SubscriptionChecker {
     }
   }
 
+  // 5 soat qolganda ogohlantirish
   async send5HoursWarning(user, diffMs) {
     try {
       const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
@@ -5054,26 +5071,29 @@ class SubscriptionChecker {
         : 'Botlaringiz';
 
       const text = 
-        `⚠️ *DIQQAT: OBUNA MUDDATINGIZ TUGAMOQDA!*\n\n` +
-        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning botingiz uchun berilgan muddat **5 SOATDAN SO'NG TUGAYDI!**\n\n` +
+        `⚠️ *DIQQAT: 3 KUNLIK HOSTING MUDDATINGIZ TUGAMOQDA!*\n\n` +
+        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning botingiz uchun berilgan 3 kunlik bepul 24/7 hosting muddati **5 SOATDAN SO'NG TUGAYDI!**\n\n` +
         `⏱ Qolgan vaqt: *${timeLeftStr}*\n` +
         `🤖 Botingiz: *${botNames}*\n\n` +
-        `⚠️ *Agar obunani uzaytirmasangiz, muddat tugashi bilan botingiz faoliyati avtomatik ravishda TO'XTATILADI (O'CHIRILADI)!*\n\n` +
-        `Botlaringiz 24/7 uzluksiz va to'xtovsiz ishlashini ta'minlash uchun iltimos, hoziroq tarif sotib oling yoki hisobingizni to'ldiring! 👇`;
+        `⚠️ *Muhim eslatma:*\n` +
+        `• 5 soatdan so'ng botingiz faoliyati avtomatik ravishda **TO'XTATILADI**.\n` +
+        `• Agar 24 soat ichida (4-kun bo'lguncha) tarif olib obunani uzaytirmasangiz, botingiz va barcha sozlamalari **BUTUNLAY O'CHIRIB YUBORILADI!**\n\n` +
+        `Botlaringiz 24/7 uzluksiz ishlashini ta'minlash va o'chib ketishini oldini olish uchun hoziroq tarifni o'zgartiring / uzaytiring! 👇`;
 
       await this.mainBot.telegram.sendMessage(user.id, text, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('💎 Tariflar va To\'lov Qilish', 'tariff_view_all')],
+          [Markup.button.callback('💎 Tarifni O\'zgartirish / Uzaytirish', 'tariff_view_all')],
           [Markup.button.callback('📁 Mening Botlarim', 'my_bots_list')]
         ])
       });
-      console.log(`📢 [Ogohlantirish] ID: ${user.id} ga 5 soatlik obuna ogohlantirishi yuborildi.`);
+      console.log(`📢 [5 Soat Ogohlantirish] ID: ${user.id} ga 5 soatlik obuna ogohlantirishi yuborildi.`);
     } catch (err) {
       console.error(`Foydalanuvchiga (ID: ${user.id}) 5h ogohlantirish yuborishda xatolik:`, err.message);
     }
   }
 
+  // 3 kun to'lganda (muddati tugaganda) - Bot to'xtaydi, lekin O'CHMAYDI!
   async handleExpiredUser(user) {
     try {
       const userBots = db.getUserBots(user.id);
@@ -5092,21 +5112,57 @@ class SubscriptionChecker {
         : 'Botlaringiz';
 
       const text = 
-        `⛔ *OBUNA MUDDATINGIZ TUGADI!*\n\n` +
-        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning 7 kunlik sinov (yoki tarif) obuna muddatingiz to'liq yakunlandi.\n\n` +
-        `🛑 Barcha botlaringiz (*${botNames}*) faoliyati avtomatik ravishda **TO'XTATILDI**.\n\n` +
-        `🚀 Botlaringizni darhol qayta yoqish va 24/7 cheklovlarsiz ishlatish uchun quyidagi tugma orqali o'zingizga qulay tarifni tanlang va to'lov qiling!`;
+        `⛔ *3 KUNLIK HOSTING MUDDATINGIZ YAKUNLANDI!*\n\n` +
+        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, sizning 3 kunlik 24/7 bepul hosting muddatingiz to'liq yakunlandi.\n\n` +
+        `🛑 Barcha botlaringiz (*${botNames}*) faoliyati avtomatik ravishda **TO'XTATILDI** (lekin hozircha o'chirilmadi, saqlanib turibdi).\n\n` +
+        `⏳ *DIQQAT (4-kun qoidasi):*\n` +
+        `Sizga 24 soat imtiyozli kutish vaqti berildi. Agar 24 soat ichida (ertaga shu vaqtgacha) tarif sotib olib obunani uzaytirmasangiz, botingiz **AVTOMATIK TARZDA BUTUNLAY O'CHIB KETADI!**\n\n` +
+        `🚀 Botingizni darhol qayta yoqish va o'chib ketishidan saqlab qolish uchun quyidagi tugma orqali tarif sotib oling:`;
 
       await this.mainBot.telegram.sendMessage(user.id, text, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('💎 Obunani Yangilash / Tariflar', 'tariff_view_all')],
-          [Markup.button.callback('👤 Profilim', 'profile_view')]
+          [Markup.button.callback('💎 Obunani Uzaytirish / Tariflar', 'tariff_view_all')],
+          [Markup.button.callback('📁 Mening Botlarim', 'my_bots_list')]
         ])
       });
-      console.log(`🛑 [Muddat Tugadi] ID: ${user.id} ning ${stoppedCount} ta boti to'xtatildi va xabar yuborildi.`);
+      console.log(`🛑 [3 Kun To'xtadi] ID: ${user.id} ning ${stoppedCount} ta boti to'xtatildi (o'chirilmadi) va xabar yuborildi.`);
     } catch (err) {
       console.error(`Foydalanuvchiga (ID: ${user.id}) muddat tugaganini yuborishda xatolik:`, err.message);
+    }
+  }
+
+  // 4-kun bo'lganda (tugaganiga 24 soat bo'lganda) - Bot BUTUNLAY O'CHIRILADI!
+  async handleAutoDeleteUserBots(user) {
+    try {
+      const userBots = db.getUserBots(user.id);
+      if (userBots.length === 0) return;
+
+      const botNames = userBots.map(b => `@${b.bot_username}`).join(', ');
+      let deletedCount = 0;
+
+      for (const b of userBots) {
+        await botManager.stopBot(b.id);
+        db.deleteBot(b.id);
+        deletedCount++;
+      }
+
+      const text = 
+        `🗑 *BOTINGIZ AVTOMATIK TARZDA O'CHIRILDI!*\n\n` +
+        `Hurmatli *${user.first_name || 'foydalanuvchi'}*, 4 kunlik muddat (3 kun hosting + 24 soat kutish vaqti) to'liq yakunlandi.\n\n` +
+        `❌ Obuna uzaytirilmaganligi sababli botingiz (*${botNames}*) bazadan va tizimdan **BUTUNLAY O'CHIRILDI**.\n\n` +
+        `Agar kelgusida yana bot yaratmoqchi bo'lsangiz, botimizga kirib yangi bot yaratishingiz yoki tarif xarid qilishingiz mumkin.`;
+
+      await this.mainBot.telegram.sendMessage(user.id, text, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🚀 Yangi Bot Yaratish', 'tariff_view_all')],
+          [Markup.button.callback('💎 Tariflar', 'tariff_view_all')]
+        ])
+      });
+      console.log(`🗑 [4-Kun Avto O'chirish] ID: ${user.id} ning ${deletedCount} ta boti bazadan butunlay o'chirildi.`);
+    } catch (err) {
+      console.error(`Foydalanuvchining (ID: ${user.id}) botlarini avto o'chirishda xatolik:`, err.message);
     }
   }
 }
@@ -5647,9 +5703,9 @@ module.exports = (bot) => {
       `Sizning hozirgi holatingiz: *${config.TARIFFS[user.tariff]?.name || 'Tekin sinov'}*\n` +
       `Qolgan muddat: *${daysLeft} kun*\n\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎁 *1. 7 Kunlik Bepul Sinov*\n` +
+      `🎁 *1. 3 Kunlik Bepul Sinov*\n` +
       `• Narxi: *0 so'm (Mutlaqo Bepul)*\n` +
-      `• Muddat: 7 kun\n` +
+      `• Muddat: 3 kun\n` +
       `• Limit: Faqat 1 ta bot\n\n` +
       `🌱 *2. Starter (1 Oylik)*\n` +
       `• Narxi: *15,000 so'm* / oy\n` +
@@ -5695,7 +5751,7 @@ module.exports = (bot) => {
     if (tariffId === 'free_trial') {
       const user = db.getUser(ctx.from.id);
       return ctx.reply(
-        `🎁 *7 Kunlik Tekin Sinov*\n\n` +
+        `🎁 *3 Kunlik Tekin Sinov*\n\n` +
         `Ushbu sinov siz ro'yxatdan o'tganingizda avtomatik taqdim etilgan.\n` +
         `Qolgan sinov muddati: *${db.getSubscriptionDaysLeft(ctx.from.id)} kun*.\n\n` +
         `Muddatingizni uzaytirish uchun *25 Pro* yoki *VIP Premium* tariflarini tanlashingiz mumkin!`,
