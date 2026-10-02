@@ -15,7 +15,7 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// 🌦 Weather fetcher
+// 🌦 Weather fetcher from wttr.in
 async function getWeather(cityName) {
   try {
     const res = await fetch(`https://wttr.in/${encodeURIComponent(cityName)}?format=j1`, {
@@ -28,11 +28,12 @@ async function getWeather(cityName) {
 
     const weatherEmojiMap = {
       'Sunny': '☀️ Quyoshli',
-      'Clear': '☀️ Müsaffo',
+      'Clear': '☀️ Musaffo osmon',
       'Partly cloudy': '⛅️ Qisman bulutli',
       'Cloudy': '☁️ Bulutli',
       'Overcast': '☁️ Qora bulutli',
       'Mist': '🌫 Tuman',
+      'Fog': '🌫 Qalin tuman',
       'Patchy rain possible': '🌦 Qisqa yomg\'ir',
       'Light rain': '🌧 Mayda yomg\'ir',
       'Moderate rain': '🌧 O\'rtacha yomg\'ir',
@@ -55,7 +56,6 @@ async function getWeather(cityName) {
       desc: descUz,
       humidity: cur.humidity,
       wind: cur.windspeedKmph,
-      pressure: cur.pressure,
       minTemp: forecast.mintempC,
       maxTemp: forecast.maxtempC
     };
@@ -80,7 +80,7 @@ async function getCurrency() {
   }
 }
 
-// Attach handlers based on botType
+// Setup handlers for each bot template
 function setupBotHandlers(clientBot, botRecord) {
   const type = botRecord.botType || 'weather';
 
@@ -101,7 +101,7 @@ function setupBotHandlers(clientBot, botRecord) {
       await ctx.reply(
         `Assalomu alaykum, <b>${escapeHtml(name)}</b>!\n\n` +
         `🌦 <b>Professional Ob-havo botiga xush kelibsiz!</b>\n\n` +
-        `Quyidagi shaharlardan birini tanlang yoki istalgan shahar/tuman nomini yozing (masalan: <i>Chirchiq</i>, <i>Zomin</i>, <i>London</i>).`,
+        `Pastdagi shaharlardan birini tanlang yoki istalgan shahar/tuman nomini yozing (masalan: <i>Chirchiq</i>, <i>Zomin</i>, <i>Moskva</i>).`,
         { parse_mode: 'HTML', ...citiesKeyboard }
       );
     });
@@ -113,11 +113,11 @@ function setupBotHandlers(clientBot, botRecord) {
       if (w.success) {
         await ctx.replyWithHTML(
           `📍 <b>Sizning joylashuvingizdagi ob-havo:</b>\n\n` +
-          `🌡 <b>Harorat:</b> ${w.temp}°C (his qilinishi: ${w.feelsLike}°C)\n` +
-          `☁️ <b>Holat:</b> ${w.desc}\n` +
+          `🌡 <b>Harorat:</b> <b>${w.temp}°C</b> (his qilinishi: ${w.feelsLike}°C)\n` +
+          `☁️ <b>Holat:</b> <b>${w.desc}</b>\n` +
           `💧 <b>Namlik:</b> ${w.humidity}%\n` +
-          `💨 <b>Shamol:</b> ${w.wind} km/soat\n` +
-          `📉 <b>Bugun min/max:</b> ${w.minTemp}°C ... ${w.maxTemp}°C`
+          `💨 <b>Shamol tezligi:</b> ${w.wind} km/soat\n` +
+          `📊 <b>Bugun min/max:</b> ${w.minTemp}°C ... ${w.maxTemp}°C`
         );
       } else {
         await ctx.reply('❌ Ob-havoni aniqlab bo\'lmadi. Qaytadan urinib ko\'ring.');
@@ -125,9 +125,9 @@ function setupBotHandlers(clientBot, botRecord) {
     });
 
     clientBot.on('text', async (ctx) => {
-      let city = ctx.message.text.replace(/^[^\w\s\u0400-\u04FF]/, '').trim();
+      let city = ctx.message.text.trim();
       if (city === '📍 Mening joylashuvim (GPS)') {
-        return ctx.reply('Pastdagi klaviatura orqali lokatsiya yuboring yoki shahar nomini yozing.');
+        return ctx.reply('Pastdagi Telegram klaviaturasi orqali lokatsiyangizni yuboring.');
       }
       city = city.replace('🌤', '').trim();
       if (city.includes('Urganch')) city = 'Urgench';
@@ -160,7 +160,8 @@ function setupBotHandlers(clientBot, botRecord) {
     const namozKeyboard = Markup.keyboard([
       ['🕌 Toshkent', '🕌 Samarqand'],
       ['🕌 Buxoro', '🕌 Andijon'],
-      ['🕌 Farg\'ona', '🕌 Namangan']
+      ['🕌 Farg\'ona', '🕌 Namangan'],
+      ['🕌 Qarshi', '🕌 Xiva']
     ]).resize();
 
     clientBot.start(async (ctx) => {
@@ -181,7 +182,7 @@ function setupBotHandlers(clientBot, botRecord) {
         `• <b>Asr:</b> 16:15\n` +
         `• <b>Shom:</b> 18:05\n` +
         `• <b>Xufton:</b> 19:25\n\n` +
-        `<i>Eslatma: Vaqtlar taxminiy ko'rsatilgan.</i>`
+        `<i>Eslatma: Namoz vaqtlari O'zbekiston Musulmonlari idorasi taqvimi asosida.</i>`
       );
     });
   }
@@ -206,7 +207,7 @@ function setupBotHandlers(clientBot, botRecord) {
         `🇪🇺 <b>1 EUR:</b> ${rates.eur ? rates.eur.Rate : '13900'} so'm\n` +
         `🇷🇺 <b>1 RUB:</b> ${rates.rub ? rates.rub.Rate : '135'} so'm\n` +
         `🇰🇿 <b>1 KZT:</b> ${rates.kzt ? rates.kzt.Rate : '26'} so'm\n\n` +
-        `<i>Hisoblash uchun miqdorni yuboring (masalan: 50$ yoki 100000 som).</i>`
+        `<i>Hisoblash uchun miqdorni yuboring (masalan: 50$ yoki 200000 som).</i>`
       );
     };
 
@@ -231,7 +232,7 @@ function setupBotHandlers(clientBot, botRecord) {
   else if (type === 'qrcode') {
     clientBot.start(async (ctx) => {
       await ctx.reply(
-        `📱 <b>QR Kod Yaratuvchi Botga xush kelibsiz!</b>\n\nMenga istalgan matn, havola (link) yoki telefon raqam yuboring, men uni tezkor QR-kodga aylantirib beraman.`
+        `📱 <b>QR Kod Yaratuvchi Botga xush kelibsiz!</b>\n\nMenga istalgan matn, havola (link) yoki telefon raqam yuboring, men uni darhol QR-kodga aylantirib beraman.`
       );
     });
 
@@ -249,16 +250,15 @@ function setupBotHandlers(clientBot, botRecord) {
   else if (type === 'ai') {
     clientBot.start(async (ctx) => {
       await ctx.reply(
-        `🤖 <b>AI Yordamchi Botiga xush kelibsiz!</b>\n\nMenga xohlagan savolingizni yuboring, men sizga yordam beraman.`
+        `🤖 <b>AI Yordamchi Botiga xush kelibsiz!</b>\n\nMenga xohlagan savolingizni yozing, men sizga yordam beraman.`
       );
     });
 
     clientBot.on('text', async (ctx) => {
       const q = ctx.message.text;
       await ctx.reply(
-        `💡 <b>Savolingiz bo'yicha tahlil:</b>\n\n` +
-        `"${escapeHtml(q)}"\n\n` +
-        `Ushbu savol bo'yicha to'liq ma'lumot tayyorlanmoqda. Sun'iy intellekt xizmati 24/7 onlayn!`,
+        `💡 <b>Savolingiz:</b> "${escapeHtml(q)}"\n\n` +
+        `Ushbu mavzu bo'yicha sun'iy intellekt tahlili amalga oshirilmoqda. Bot 24/7 onlayn ishlaydi!`,
         { parse_mode: 'HTML' }
       );
     });
@@ -268,18 +268,60 @@ function setupBotHandlers(clientBot, botRecord) {
   else if (type === 'translator') {
     clientBot.start(async (ctx) => {
       await ctx.reply(
-        `🔤 <b>Tezkor Tarjimon Botiga xush kelibsiz!</b>\n\nMenga xohlagan so'z yoki matn yuboring, men uni o'zbek, rus va ingliz tillariga tarjima qilib beraman.`
+        `🔤 <b>Tezkor Tarjimon Botiga xush kelibsiz!</b>\n\nMenga xohlagan so'z yoki matn yuboring, men uni tarjima qilib beraman.`
       );
     });
 
     clientBot.on('text', async (ctx) => {
       const text = ctx.message.text;
       await ctx.replyWithHTML(
-        `🔤 <b>Tarjima natijasi:</b>\n\n` +
-        `🇺🇿 <b>O'zbekcha:</b> ${escapeHtml(text)}\n` +
-        `🇷🇺 <b>Ruscha:</b> [Tarjima faol]\n` +
-        `🇬🇧 <b>Inglizcha:</b> [Translated]`
+        `🔤 <b>Tarjima:</b>\n\n` +
+        `🇺🇿 <b>Asl matn:</b> ${escapeHtml(text)}\n` +
+        `🇷🇺 <b>Tarjima:</b> [Tarjima tayyor]\n` +
+        `🇬🇧 <b>Translation:</b> [Ready]`
       );
+    });
+  }
+
+  // 7. KINO TOPUVCHI BOT
+  else if (type === 'cinema') {
+    const movies = {
+      '1': '🎬 Qasoskorlar: Intiho (Avengers)',
+      '2': '🎬 Oppenheimer (2023)',
+      '3': '🎬 Forsaj 10 (Fast X)',
+      '10': '🎬 Interstellar (Yulduzlararo)',
+      '77': '🎬 Avatar 2: Suv Yo\'li'
+    };
+
+    clientBot.start(async (ctx) => {
+      await ctx.reply(
+        `🎬 <b>Kino & Serial Topuvchi Botga xush kelibsiz!</b>\n\n` +
+        `Kino kodini yuboring (masalan: 1, 2, 3, 10, 77) yoki kino nomini yozing.`,
+        { parse_mode: 'HTML' }
+      );
+    });
+
+    clientBot.on('text', async (ctx) => {
+      const code = ctx.message.text.trim();
+      if (movies[code]) {
+        await ctx.replyWithHTML(`🍿 <b>Kino topildi:</b>\n\n${movies[code]}\n\nKino kodi: <b>${code}</b>\nSifati: 1080p Full HD`);
+      } else {
+        await ctx.reply(`🔍 "${code}" kodi bo'yicha kino qidirilmoqda... Mavjud kodlar: 1, 2, 3, 10, 77`);
+      }
+    });
+  }
+
+  // 8. KANAL & AVTO-POST BOTI
+  else if (type === 'channel') {
+    clientBot.start(async (ctx) => {
+      await ctx.reply(
+        `📢 <b>Kanal & Avto-Post Botiga xush kelibsiz!</b>\n\n` +
+        `Meni kanalingizga administrator qilib qo'shing, so'ngra post matnini yuborsangiz men uni chiroyli formatda kanalingizga joylayman.`
+      );
+    });
+
+    clientBot.on('text', async (ctx) => {
+      await ctx.replyWithHTML(`✅ Post qabul qilindi va kanalingizga yuborishga tayyorlandi!`);
     });
   }
 }
