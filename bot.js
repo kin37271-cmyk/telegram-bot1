@@ -1,13 +1,32 @@
 const { Telegraf, Markup } = require('telegraf');
 const config = require('./config');
 const db = require('./data/db');
-const TEMPLATES = require('./templates/templatesData');
+const botManager = require('./services/botManager');
 
 const bot = new Telegraf(config.BOT_TOKEN);
 
 const WEBAPP_URL = `${config.BASE_URL}/webapp`;
 
-// Middleware to track users and log
+// In-memory map for user conversation state: userId -> { step, botType }
+const userCreationStates = new Map();
+
+// Helper to escape HTML
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Admin check
+function isAdmin(userId) {
+  return String(userId) === String(config.OWNER_ID);
+}
+
+// Middleware
 bot.use(async (ctx, next) => {
   if (ctx.from) {
     db.getOrCreateUser(ctx.from.id, {
@@ -18,50 +37,48 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// Helper for admin check
-function isAdmin(userId) {
-  return String(userId) === String(config.OWNER_ID);
-}
-
 // ==================== /START COMMAND ====================
 bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   const name = ctx.from.first_name || 'Foydalanuvchi';
-  const user = db.getOrCreateUser(userId, { name, username: ctx.from.username || '' });
+  userCreationStates.delete(userId); // reset any pending state
 
+  const user = db.getOrCreateUser(userId, { name, username: ctx.from.username || '' });
   const remaining = db.getRemainingTime(userId);
   const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
   const sites = db.getSitesByUser(userId);
-  const activeCount = sites.filter(s => s.is_active).length;
+  const userBots = db.getBotsByUser(userId);
 
   const webAppWithUser = `${WEBAPP_URL}?user_id=${userId}&name=${encodeURIComponent(name)}&username=${encodeURIComponent(ctx.from.username || '')}`;
 
   const welcomeText = 
 `🌟 <b>Assalomu alaykum, ${escapeHtml(name)}!</b>
 
-🚀 <b>MAKER BOT — 20-in-1 Professional Sayt Konstruktoriga xush kelibsiz!</b>
+🚀 <b>MAKER BOT — Sayt & Bot Konstruktoriga xush kelibsiz!</b>
 
-Bu yerda siz o'z biznesingiz yoki xizmatlaringiz uchun <b>20 xil zamonaviy sayt</b> yaratishingiz mumkin. Har bir sayt avtomatik tarzda <b>24/7 bepul hostingda</b> ishga tushadi!
+Bu yerda siz o'z biznesingiz uchun <b>20 xil zamonaviy sayt</b> va professional <b>Telegram Botlar</b> yaratishingiz mumkin. Barcha sayt va botlar <b>24/7 avto hostingda</b> uzluksiz ishlaydi!
 
 👤 <b>Sizning profilingiz:</b>
 • 🆔 <b>ID:</b> <code>${userId}</code>
 • 🏷 <b>Tarif:</b> <b>${tariffObj.name}</b>
 • ⏳ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>
 • 💰 <b>Balans:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
-• 🌐 <b>Saytlaringiz:</b> <b>${sites.length} ta</b> (${activeCount} ta faol)
+• 🌐 <b>Saytlaringiz:</b> <b>${sites.length} ta</b>
+• 🤖 <b>Botlaringiz:</b> <b>${userBots.length} ta</b>
 
-Quyidagi tugmalardan birini tanlang:`;
+Quyidagi bo'limlardan birini tanlang:`;
 
   const inlineButtons = [
     [Markup.button.webApp('🚀 Web App (20 ta Sayt Konstruktori)', webAppWithUser)],
     [
-      Markup.button.callback('➕ Sayt Yaratish', 'btn_create_site'),
-      Markup.button.callback('📂 Mening Saytlarim', 'btn_my_sites')
+      Markup.button.callback('🤖 Bot Yaratish', 'btn_create_bot'),
+      Markup.button.callback('🌐 Sayt Yaratish', 'btn_create_site')
     ],
     [
-      Markup.button.callback('⏳ Tarifim & Muddat', 'btn_my_tariff'),
-      Markup.button.callback('💳 Balans & To\'lov', 'btn_pay')
-    ]
+      Markup.button.callback('📂 Mening Botlarim & Saytlarim', 'btn_my_assets'),
+      Markup.button.callback('⏳ Tarif & Muddat', 'btn_my_tariff')
+    ],
+    [Markup.button.callback('💳 Balans & To\'lov', 'btn_pay')]
   ];
 
   if (isAdmin(userId)) {
@@ -71,40 +88,139 @@ Quyidagi tugmalardan birini tanlang:`;
   await ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard(inlineButtons));
 });
 
-// ==================== MENING SAYTLARIM ====================
-bot.action('btn_my_sites', async (ctx) => {
+// ==================== BOT YARATISH BO'LIMI ====================
+bot.action('btn_create_bot', async (ctx) => {
   const userId = ctx.from.id;
-  const sites = db.getSitesByUser(userId);
+  userCreationStates.delete(userId);
 
-  if (sites.length === 0) {
+  const remaining = db.getRemainingTime(userId);
+  if (remaining.isExpired && !isAdmin(userId)) {
     return ctx.editMessageText(
-      `📂 <b>Sizda hali yaratilgan saytlar yo'q.</b>\n\nPastdagi tugmani bosib, 20 xil zamonaviy shablondan birini tanlang va 1 daqiqada o'z saytingizga ega bo'ling!`,
+      `⚠️ <b>Kechirasiz, sizning tarifingiz muddati tugagan!</b>\n\nYangi bot yaratish uchun iltimos, tarifni uzaytiring yoki hisobingizni to'ldiring.`,
       {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('➕ Sayt Yaratish', 'btn_create_site')],
+          [Markup.button.callback('💳 Balans & To\'lov', 'btn_pay')],
           [Markup.button.callback('⬅️ Asosiy Menyu', 'btn_main_menu')]
         ])
       }
     );
   }
 
-  let text = `📂 <b>Sizning 24/7 Hostingdagi Saytlaringiz:</b>\n\n`;
+  const text = 
+`🤖 <b>Qanday turdagi Bot yaratmoqchisiz?</b>
+
+O'zingizga kerakli bot yo'nalishini tanlang:`;
+
+  const buttons = [
+    [
+      Markup.button.callback('🌦 Ob-havo Boti', 'pick_bot_weather'),
+      Markup.button.callback('🕌 Namoz Vaqtlari Boti', 'pick_bot_namoz')
+    ],
+    [
+      Markup.button.callback('💵 Valyuta Kurslari Boti', 'pick_bot_currency'),
+      Markup.button.callback('📱 QR Kod Boti', 'pick_bot_qrcode')
+    ],
+    [
+      Markup.button.callback('🤖 ChatGPT / AI Yordamchi', 'pick_bot_ai'),
+      Markup.button.callback('🔤 Tarjimon Boti', 'pick_bot_translator')
+    ],
+    [Markup.button.callback('⬅️ Orqaga', 'btn_main_menu')]
+  ];
+
+  await ctx.editMessageText(text, {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard(buttons)
+  });
+});
+
+// Bot Type Selected -> Ask Token
+bot.action(/pick_bot_([a-z_]+)/, async (ctx) => {
+  const botType = ctx.match[1];
+  const userId = ctx.from.id;
+
+  const typeNames = {
+    weather: '🌦 Ob-havo Boti',
+    namoz: '🕌 Namoz Vaqtlari Boti',
+    currency: '💵 Valyuta Kurslari Boti',
+    qrcode: '📱 QR Kod Boti',
+    ai: '🤖 ChatGPT / AI Boti',
+    translator: '🔤 Tarjimon Boti'
+  };
+
+  userCreationStates.set(userId, { step: 'awaiting_token', botType });
+
+  const text = 
+`🎯 <b>Tanlandi: ${typeNames[botType] || botType}</b>
+
+Endi yangi botingizning <b>API TOKEN</b>ini yuboring!
+
+📌 <b>Tokenni olish yo'riqnomasi:</b>
+1. Telegramda <b>@BotFather</b> botiga kiring.
+2. <code>/newbot</code> buyrug'ini yuboring va botingizga nom bering.
+3. BotFather bergan HTTP API tokenni (masalan: <code>1234567890:AAH...</code>) nusxalab, shu yerga xabar sifatida yuboring!
+
+<i>Bot avtomatik tarzda 24/7 serverimizda ishga tushadi!</i>`;
+
+  await ctx.editMessageText(text, {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard([
+      [Markup.button.url('👉 @BotFather ga o\'tish', 'https://t.me/BotFather')],
+      [Markup.button.callback('❌ Bekor qilish', 'btn_main_menu')]
+    ])
+  });
+});
+
+// ==================== MENING ASSETLARIM (BOTLAR & SAYTLAR) ====================
+bot.action('btn_my_assets', async (ctx) => {
+  const userId = ctx.from.id;
+  const sites = db.getSitesByUser(userId);
+  const bots = db.getBotsByUser(userId);
+
+  if (sites.length === 0 && bots.length === 0) {
+    return ctx.editMessageText(
+      `📂 <b>Sizda hali yaratilgan bot yoki saytlar yo'q.</b>\n\nPastdagi tugmalar orqali 1 daqiqada o'z botingiz yoki saytingizni ishga tushiring!`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('🤖 Bot Yaratish', 'btn_create_bot'),
+            Markup.button.callback('🌐 Sayt Yaratish', 'btn_create_site')
+          ],
+          [Markup.button.callback('⬅️ Asosiy Menyu', 'btn_main_menu')]
+        ])
+      }
+    );
+  }
+
+  let text = `📂 <b>Sizning 24/7 Faol Loyihalaringiz:</b>\n\n`;
   const buttons = [];
 
-  sites.forEach((s, idx) => {
-    const fullUrl = `${config.BASE_URL}/site/${s.slug}`;
-    const status = s.is_active ? '🟢 Faol' : '🔴 To\'xtatilgan';
-    text += `${idx + 1}. <b>${escapeHtml(s.title)}</b> (${status})\n`;
-    text += `🔗 Havola: ${fullUrl}\n\n`;
+  if (bots.length > 0) {
+    text += `🤖 <b>Telegram Botlaringiz (${bots.length} ta):</b>\n`;
+    bots.forEach((b, idx) => {
+      const status = b.is_active ? '🟢 Faol' : '🔴 To\'xtatilgan';
+      text += `${idx + 1}. <b>${escapeHtml(b.botName)}</b> (@${b.botUsername}) — ${status}\n`;
+      buttons.push([Markup.button.url(`🤖 @${b.botUsername} ga o'tish`, `https://t.me/${b.botUsername}`)]);
+    });
+    text += `\n`;
+  }
 
-    buttons.push([Markup.button.url(`🌐 ${s.title} (Ochish)`, fullUrl)]);
-  });
+  if (sites.length > 0) {
+    text += `🌐 <b>Veb-saytlaringiz (${sites.length} ta):</b>\n`;
+    sites.forEach((s, idx) => {
+      const fullUrl = `${config.BASE_URL}/site/${s.slug}`;
+      const status = s.is_active ? '🟢 Faol' : '🔴 To\'xtatilgan';
+      text += `${idx + 1}. <b>${escapeHtml(s.title)}</b> — ${status}\n`;
+      buttons.push([Markup.button.url(`🌐 ${s.title} (Ko'rish)`, fullUrl)]);
+    });
+  }
 
   buttons.push([
-    Markup.button.callback('➕ Yangi Sayt', 'btn_create_site'),
-    Markup.button.callback('⬅️ Menyu', 'btn_main_menu')
+    Markup.button.callback('➕ Yangi Bot', 'btn_create_bot'),
+    Markup.button.callback('➕ Yangi Sayt', 'btn_create_site')
   ]);
+  buttons.push([Markup.button.callback('⬅️ Menyu', 'btn_main_menu')]);
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
@@ -116,8 +232,9 @@ bot.action('btn_my_sites', async (ctx) => {
 // ==================== SAYT YARATISH ====================
 bot.action('btn_create_site', async (ctx) => {
   const userId = ctx.from.id;
-  const remaining = db.getRemainingTime(userId);
+  userCreationStates.delete(userId);
 
+  const remaining = db.getRemainingTime(userId);
   if (remaining.isExpired && !isAdmin(userId)) {
     return ctx.editMessageText(
       `⚠️ <b>Kechirasiz, sizning tarifingiz muddati tugagan!</b>\n\nYangi sayt yaratish uchun iltimos, tarifni uzaytiring yoki hisobingizni to'ldiring.`,
@@ -136,7 +253,7 @@ bot.action('btn_create_site', async (ctx) => {
   const text = 
 `🚀 <b>20 xil Zamonaviy Sayt Yaratish:</b>
 
-Eng qulay va tezkor usul — <b>Web App</b> orqali shablonlarni ko'rish va 1 marta bosishda sayt yaratish:
+Eng qulay usul — <b>Web App</b> orqali 20 ta shablonni ko'rish va 1 marta bosishda sayt yaratish:
 
 1. 💻 Shaxsiy Portfolio
 2. 🍽 Restoran & Kafe
@@ -150,7 +267,7 @@ Eng qulay va tezkor usul — <b>Web App</b> orqali shablonlarni ko'rish va 1 mar
 10. 🏗 Qurilish & Interyer dizayn
 ... va boshqa 20 xil zamonaviy yo'nalishlar!
 
-Pastdagi tugmani bosing va o'z saytingizni yarating:`;
+Pastdagi tugmani bosing va saytingizni ishga tushiring:`;
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
@@ -168,21 +285,21 @@ bot.action('btn_my_tariff', async (ctx) => {
   const remaining = db.getRemainingTime(userId);
   const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
 
-  let text = 
+  const text = 
 `⏳ <b>Sizning Tarifingiz & Muddat:</b>
 
 • 🏷 <b>Amaldagi tarif:</b> <b>${tariffObj.name}</b>
 • ⏱ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>
 • 💰 <b>Balans:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
-• 📌 <b>Sayt limiti:</b> ${tariffObj.maxSites} tagacha sayt
+• 📌 <b>Limit:</b> ${tariffObj.maxSites} tagacha sayt / bot
 
 💎 <b>Mavjud Tarif Rejalari:</b>
-1. <b>🌱 Starter (1 oylik):</b> 15,000 so'm (3 ta sayt)
-2. <b>⭐ Pro Standart (1 oylik):</b> 25,000 so'm (10 ta sayt)
-3. <b>💼 Business (3 oylik):</b> 60,000 so'm (25 ta sayt)
-4. <b>👑 VIP Lifetime (Umrbod):</b> 150,000 so'm (Cheksiz saytlar)
+1. <b>🌱 Starter (1 oylik):</b> 15,000 so'm (3 ta loyiha)
+2. <b>⭐ Pro Standart (1 oylik):</b> 25,000 so'm (10 ta loyiha)
+3. <b>💼 Business (3 oylik):</b> 60,000 so'm (25 ta loyiha)
+4. <b>👑 VIP Lifetime (Umrbod):</b> 150,000 so'm (Cheksiz loyihalar)
 
-Tarifni faollashtirish uchun pastdagi to'lov tugmasini bosing:`;
+Tarifni faollashtirish uchun hisobingizni to'ldiring:`;
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
@@ -220,11 +337,14 @@ Tarif sotib olish uchun quyidagi rekvizitlarga to'lov qiling:
 // ==================== ASOSIY MENYU ====================
 bot.action('btn_main_menu', async (ctx) => {
   const userId = ctx.from.id;
+  userCreationStates.delete(userId);
+
   const name = ctx.from.first_name || 'Foydalanuvchi';
   const user = db.getUser(userId);
   const remaining = db.getRemainingTime(userId);
   const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
   const sites = db.getSitesByUser(userId);
+  const bots = db.getBotsByUser(userId);
 
   const webAppWithUser = `${WEBAPP_URL}?user_id=${userId}&name=${encodeURIComponent(name)}`;
 
@@ -235,18 +355,20 @@ bot.action('btn_main_menu', async (ctx) => {
 • 🏷 <b>Tarif:</b> <b>${tariffObj.name}</b>
 • ⏳ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>
 • 💰 <b>Balans:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
-• 🌐 <b>Saytlar:</b> <b>${sites.length} ta</b>`;
+• 🌐 <b>Saytlaringiz:</b> <b>${sites.length} ta</b>
+• 🤖 <b>Botlaringiz:</b> <b>${bots.length} ta</b>`;
 
   const inlineButtons = [
     [Markup.button.webApp('🚀 Web App (20 ta Sayt Konstruktori)', webAppWithUser)],
     [
-      Markup.button.callback('➕ Sayt Yaratish', 'btn_create_site'),
-      Markup.button.callback('📂 Mening Saytlarim', 'btn_my_sites')
+      Markup.button.callback('🤖 Bot Yaratish', 'btn_create_bot'),
+      Markup.button.callback('🌐 Sayt Yaratish', 'btn_create_site')
     ],
     [
-      Markup.button.callback('⏳ Tarifim & Muddat', 'btn_my_tariff'),
-      Markup.button.callback('💳 Balans & To\'lov', 'btn_pay')
-    ]
+      Markup.button.callback('📂 Mening Loyihalarim', 'btn_my_assets'),
+      Markup.button.callback('⏳ Tarif & Muddat', 'btn_my_tariff')
+    ],
+    [Markup.button.callback('💳 Balans & To\'lov', 'btn_pay')]
   ];
 
   if (isAdmin(userId)) {
@@ -259,6 +381,71 @@ bot.action('btn_main_menu', async (ctx) => {
   });
 });
 
+// ==================== INCOMING TEXT (TOKEN INPUT) ====================
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  const text = ctx.message.text.trim();
+
+  // If user is awaiting bot token
+  const state = userCreationStates.get(userId);
+  if (state && state.step === 'awaiting_token') {
+    // Check if token format matches Telegram bot token
+    if (!text.includes(':') || text.length < 35) {
+      return ctx.reply(
+        '❌ <b>Token formati noto\'g\'ri!</b>\n\n' +
+        'Bot tokeni taxminan quyidagicha ko\'rinishda bo\'ladi:\n' +
+        '<code>8922811264:AAH_PTU_mS38bMfS8HDryVX8pjdhZXdrrvU</code>\n\n' +
+        'Iltimos, @BotFather dan olgan tokenni to\'liq yuboring:',
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    const waitMsg = await ctx.reply('⏳ Token tekshirilmoqda va botingiz ishga tushirilmoqda...');
+
+    const verify = await botManager.verifyToken(text);
+    if (!verify.valid) {
+      return ctx.reply(`❌ <b>Token yaroqsiz!</b>\nTelegram API xatosi: ${verify.error}\n\nIltimos, to'g'ri tokenni yuboring:`, { parse_mode: 'HTML' });
+    }
+
+    // Check if duplicate token
+    const existing = db.getAllBots().find(b => b.token === text);
+    if (existing) {
+      userCreationStates.delete(userId);
+      return ctx.reply(`⚠️ Ushbu bot allaqachon tizimda ro'yxatdan o'tgan: @${existing.botUsername}`);
+    }
+
+    const newBot = db.createBot({
+      userId,
+      token: text,
+      botType: state.botType,
+      botUsername: verify.username,
+      botName: verify.firstName
+    });
+
+    userCreationStates.delete(userId);
+
+    // Launch bot
+    await botManager.startBot(newBot);
+
+    try { ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+
+    const successMsg = 
+`🎉 <b>TABRIKLAYMIZ! BOTINGIZ ISHGA TUSHDI!</b>
+
+🤖 <b>Bot nomi:</b> ${escapeHtml(verify.firstName)}
+🔗 <b>Havola:</b> @${verify.username}
+🛠 <b>Turi:</b> ${state.botType.toUpperCase()}
+⚡ <b>Holati:</b> 24/7 Avto Hostingda Faol 🟢
+
+Botingizga kirib <b>/start</b> bosib darhol sinab ko'rishingiz mumkin!`;
+
+    return ctx.replyWithHTML(successMsg, Markup.inlineKeyboard([
+      [Markup.button.url(`👉 @${verify.username} ga o'tish`, `https://t.me/${verify.username}`)],
+      [Markup.button.callback('⬅️ Asosiy Menyu', 'btn_main_menu')]
+    ]));
+  }
+});
+
 // ==================== CHEK QABUL QILISH (PHOTO) ====================
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
@@ -268,7 +455,6 @@ bot.on('photo', async (ctx) => {
 
   await ctx.reply('✅ To\'lov chekingiz qabul qilindi! Administratorga yuborildi, tez orada tekshirib balansingiz yangilanadi.');
 
-  // Notify admin
   const adminMsg = 
 `🔔 <b>YANGI TO'LOV CHEKI KELDI!</b>
 
@@ -300,7 +486,6 @@ bot.on('photo', async (ctx) => {
 
 // ==================== ADMIN ACTIONS ====================
 
-// Admin menu
 bot.action('btn_admin_menu', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
 
@@ -310,9 +495,8 @@ bot.action('btn_admin_menu', async (ctx) => {
 
 📊 <b>Umumiy Statistika:</b>
 • 👥 <b>Jami foydalanuvchilar:</b> ${stats.totalUsers} ta
-• 🌐 <b>Jami saytlar:</b> ${stats.totalSites} ta
-• 🟢 <b>Faol saytlar:</b> ${stats.activeSites} ta
-• 🔴 <b>To'xtatilgan saytlar:</b> ${stats.inactiveSites} ta
+• 🌐 <b>Jami saytlar:</b> ${stats.totalSites} ta (${stats.activeSites} faol)
+• 🤖 <b>Jami botlar:</b> ${stats.totalBots} ta (${stats.activeBots} faol)
 
 Quyidagi amallardan birini tanlang:`;
 
@@ -328,18 +512,18 @@ Quyidagi amallardan birini tanlang:`;
   });
 });
 
-// Admin: Users list
 bot.action('adm_users_list', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
 
-  const users = db.getAllUsers().slice(-10).reverse(); // Last 10 users
+  const users = db.getAllUsers().slice(-10).reverse();
   let text = `👥 <b>Oxirgi 10 ta foydalanuvchi:</b>\n\n`;
 
   const buttons = [];
   users.forEach(u => {
     const sites = db.getSitesByUser(u.id);
+    const userBots = db.getBotsByUser(u.id);
     const rem = db.getRemainingTime(u.id);
-    text += `• <b>${escapeHtml(u.name)}</b> (ID: <code>${u.id}</code>) | ${u.tariff} (${rem.text}) | Saytlar: ${sites.length} ta\n`;
+    text += `• <b>${escapeHtml(u.name)}</b> (ID: <code>${u.id}</code>) | ${u.tariff} (${rem.text}) | Sayt: ${sites.length}, Bot: ${userBots.length}\n`;
     buttons.push([Markup.button.callback(`👤 ${u.name} (Boshqarish)`, `adm_manage_user_${u.id}`)]);
   });
 
@@ -351,7 +535,6 @@ bot.action('adm_users_list', async (ctx) => {
   });
 });
 
-// Admin: Manage single user
 bot.action(/adm_manage_user_(\d+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
   const targetId = ctx.match[1];
@@ -359,16 +542,16 @@ bot.action(/adm_manage_user_(\d+)/, async (ctx) => {
   if (!user) return ctx.answerCbQuery('Foydalanuvchi topilmadi');
 
   const sites = db.getSitesByUser(targetId);
+  const userBots = db.getBotsByUser(targetId);
   const rem = db.getRemainingTime(targetId);
 
   let text = 
-`👤 <b>Foydalanuvchi Ma'lumotlari:</b>
+`👤 <b>Foydalanuvchi:</b>
 • <b>Ism:</b> ${escapeHtml(user.name)} (@${user.username || 'yo\'q'})
 • <b>ID:</b> <code>${user.id}</code>
 • <b>Balans:</b> ${(user.balance || 0).toLocaleString()} so'm
-• <b>Tarif:</b> ${user.tariff}
-• <b>Muddat:</b> ${rem.text}
-• <b>Saytlari:</b> ${sites.length} ta\n\n`;
+• <b>Tarif:</b> ${user.tariff} (${rem.text})
+• <b>Loyihalari:</b> ${sites.length} ta sayt, ${userBots.length} ta bot\n\n`;
 
   const buttons = [
     [
@@ -387,11 +570,19 @@ bot.action(/adm_manage_user_(\d+)/, async (ctx) => {
     ]
   ];
 
+  if (userBots.length > 0) {
+    userBots.forEach(b => {
+      const toggleAction = `adm_toggle_bot_${b.id}_${targetId}`;
+      const statusIcon = b.is_active ? '🟢 Faol (O\'chirish)' : '🔴 To\'xtatilgan (Yoqish)';
+      buttons.push([Markup.button.callback(`Bot: @${b.botUsername} -> ${statusIcon}`, toggleAction)]);
+    });
+  }
+
   if (sites.length > 0) {
     sites.forEach(s => {
       const toggleAction = `adm_toggle_site_${s.id}_${targetId}`;
       const statusIcon = s.is_active ? '🟢 Faol (O\'chirish)' : '🔴 To\'xtatilgan (Yoqish)';
-      buttons.push([Markup.button.callback(`Sayt: ${s.title.slice(0, 15)} -> ${statusIcon}`, toggleAction)]);
+      buttons.push([Markup.button.callback(`Sayt: ${s.title.slice(0, 12)} -> ${statusIcon}`, toggleAction)]);
     });
   }
 
@@ -403,16 +594,23 @@ bot.action(/adm_manage_user_(\d+)/, async (ctx) => {
   });
 });
 
-// Admin: Toggle user site
-bot.action(/adm_toggle_site_([^_]+)_(\d+)/, async (ctx) => {
+// Admin toggle bot
+bot.action(/adm_toggle_bot_([^_]+)_(\d+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
-  const siteId = ctx.match[1];
+  const botId = ctx.match[1];
   const targetId = ctx.match[2];
 
-  const site = db.toggleSiteStatus(siteId);
-  await ctx.answerCbQuery(site ? `Sayt holati: ${site.is_active ? 'Faol qilindi 🟢' : 'To\'xtatildi 🔴'}` : 'Xatolik');
+  const botRecord = db.toggleBotStatus(botId);
+  if (botRecord) {
+    if (botRecord.is_active) {
+      await botManager.startBot(botRecord);
+    } else {
+      botManager.stopBot(botRecord.id);
+    }
+  }
 
-  // Refresh user manage view
+  await ctx.answerCbQuery(botRecord ? `Bot holati: ${botRecord.is_active ? 'Faol 🟢' : 'To\'xtatildi 🔴'}` : 'Xato');
+
   ctx.match = [null, targetId];
   return bot.handleUpdate({
     ...ctx.update,
@@ -420,7 +618,23 @@ bot.action(/adm_toggle_site_([^_]+)_(\d+)/, async (ctx) => {
   });
 });
 
-// Admin: Balance update callback
+// Admin toggle site
+bot.action(/adm_toggle_site_([^_]+)_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const siteId = ctx.match[1];
+  const targetId = ctx.match[2];
+
+  const site = db.toggleSiteStatus(siteId);
+  await ctx.answerCbQuery(site ? `Sayt holati: ${site.is_active ? 'Faol 🟢' : 'To\'xtatildi 🔴'}` : 'Xato');
+
+  ctx.match = [null, targetId];
+  return bot.handleUpdate({
+    ...ctx.update,
+    callback_query: { ...ctx.callback_query, data: `adm_manage_user_${targetId}` }
+  });
+});
+
+// Admin balance update
 bot.action(/adm_add_bal_(\d+)_(-?\d+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
   const targetId = ctx.match[1];
@@ -433,7 +647,7 @@ bot.action(/adm_add_bal_(\d+)_(-?\d+)/, async (ctx) => {
   }
 });
 
-// Admin: Days update callback
+// Admin days update
 bot.action(/adm_add_days_(\d+)_(-?\d+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
   const targetId = ctx.match[1];
@@ -447,7 +661,7 @@ bot.action(/adm_add_days_(\d+)_(-?\d+)/, async (ctx) => {
   }
 });
 
-// Admin: Tariff set callback
+// Admin tariff set
 bot.action(/adm_set_tar_(\d+)_([a-z_]+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
   const targetId = ctx.match[1];
@@ -461,7 +675,7 @@ bot.action(/adm_set_tar_(\d+)_([a-z_]+)/, async (ctx) => {
   }
 });
 
-// Admin: Reject payment
+// Admin reject payment
 bot.action(/adm_reject_(\d+)/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Ruxsat yo\'q!');
   const targetId = ctx.match[1];
@@ -469,17 +683,12 @@ bot.action(/adm_reject_(\d+)/, async (ctx) => {
   await bot.telegram.sendMessage(targetId, '❌ To\'lov chekingiz tasdiqlanmadi. Iltimos, ma\'lumotlarni qayta tekshirib yuboring yoki administrator bilan bog\'laning.').catch(() => {});
 });
 
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 async function startBot() {
   try {
     const me = await bot.telegram.getMe();
     console.log(`🤖 Telegram Bot ulandi: @${me.username} (${me.first_name})`);
 
-    // Set Menu Button to open Web App
+    // Set Menu Button
     await bot.telegram.setChatMenuButton({
       menu_button: {
         type: 'web_app',
@@ -492,7 +701,7 @@ async function startBot() {
       console.error('Bot launch xatolik:', err.message);
     });
 
-    console.log('✅ Bot muvaffaqiyatli ishga tushdi va Web Appga ulandi!');
+    console.log('✅ Asosiy Bot muvaffaqiyatli ishga tushdi!');
   } catch (err) {
     console.error('Bot ishga tushirishda xatolik:', err.message);
   }

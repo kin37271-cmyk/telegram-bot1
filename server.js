@@ -6,6 +6,7 @@ const config = require('./config');
 const db = require('./data/db');
 const TEMPLATES = require('./templates/templatesData');
 const { renderSiteHtml } = require('./templates/renderer');
+const botManager = require('./services/botManager');
 
 const app = express();
 
@@ -40,13 +41,10 @@ app.get(['/site/:slug', '/s/:slug'], (req, res) => {
     `);
   }
 
-  // Increment view counter
   db.incrementSiteViews(site.id);
 
-  // Check if owner's tariff has expired
   const owner = db.getUser(site.userId);
   if (owner && owner.expires_at && owner.expires_at < Date.now()) {
-    // If expired, render inactive
     return res.send(renderSiteHtml({ ...site, is_active: false }));
   }
 
@@ -110,7 +108,6 @@ app.post('/api/sites', (req, res) => {
     return res.status(400).json({ success: false, message: 'Foydalanuvchi topilmadi' });
   }
 
-  // Check remaining time
   const remaining = db.getRemainingTime(userId);
   if (remaining.isExpired && String(userId) !== String(config.OWNER_ID)) {
     return res.status(403).json({
@@ -119,7 +116,6 @@ app.post('/api/sites', (req, res) => {
     });
   }
 
-  // Check sites limit
   const userSites = db.getSitesByUser(userId);
   const tariff = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
   const maxAllowed = tariff.maxSites || 1;
@@ -153,30 +149,83 @@ app.delete('/api/sites/:id', (req, res) => {
   res.json({ success });
 });
 
+// 6. User's bots
+app.get('/api/bots', (req, res) => {
+  const userId = req.query.user_id;
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+  const bots = db.getBotsByUser(userId);
+  res.json(bots);
+});
+
+// 7. Create bot via API (token based)
+app.post('/api/bots', async (req, res) => {
+  const { userId, token, botType } = req.body;
+  if (!userId || !token) {
+    return res.status(400).json({ success: false, message: 'Foydalanuvchi va token kiritilishi shart' });
+  }
+
+  const cleanToken = token.trim();
+  const verify = await botManager.verifyToken(cleanToken);
+  if (!verify.valid) {
+    return res.status(400).json({ success: false, message: 'BotFather tokeni noto\'g\'ri! Qayta tekshiring.' });
+  }
+
+  // Check existing token
+  const existing = db.getAllBots().find(b => b.token === cleanToken);
+  if (existing) {
+    return res.status(400).json({ success: false, message: 'Bu bot token allaqachon qo\'shilgan!' });
+  }
+
+  const newBot = db.createBot({
+    userId,
+    token: cleanToken,
+    botType: botType || 'weather',
+    botUsername: verify.username,
+    botName: verify.firstName
+  });
+
+  // Launch bot 24/7
+  await botManager.startBot(newBot);
+
+  res.json({ success: true, bot: newBot });
+});
+
+// 8. Delete bot
+app.delete('/api/bots/:id', (req, res) => {
+  const botId = req.params.id;
+  const userId = req.query.user_id;
+
+  botManager.stopBot(botId);
+  const success = db.deleteBot(botId, userId);
+  res.json({ success });
+});
+
 // ===================== ADMIN API =====================
 
 function isAdmin(adminId) {
   return String(adminId) === String(config.OWNER_ID);
 }
 
-// Admin: System stats
+// Admin stats
 app.get('/api/admin/stats', (req, res) => {
   if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
   const stats = db.getStats();
   res.json(stats);
 });
 
-// Admin: All users with their sites
+// Admin users
 app.get('/api/admin/users', (req, res) => {
   if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
 
   const users = db.getAllUsers();
   const result = users.map(u => {
     const sites = db.getSitesByUser(u.id);
+    const bots = db.getBotsByUser(u.id);
     const remaining = db.getRemainingTime(u.id);
     return {
       ...u,
       sites,
+      bots,
       remaining_text: remaining.text,
       is_expired: remaining.isExpired
     };
@@ -184,7 +233,7 @@ app.get('/api/admin/users', (req, res) => {
   res.json(result);
 });
 
-// Admin: Toggle site active status
+// Admin toggle site
 app.post('/api/admin/toggle-site', (req, res) => {
   const { admin_id, site_id, is_active } = req.body;
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
@@ -193,7 +242,23 @@ app.post('/api/admin/toggle-site', (req, res) => {
   res.json({ success: !!site, site });
 });
 
-// Admin: Add or subtract balance
+// Admin toggle bot
+app.post('/api/admin/toggle-bot', (req, res) => {
+  const { admin_id, bot_id, is_active } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const botRecord = db.toggleBotStatus(bot_id, is_active);
+  if (botRecord) {
+    if (botRecord.is_active) {
+      botManager.startBot(botRecord);
+    } else {
+      botManager.stopBot(botRecord.id);
+    }
+  }
+  res.json({ success: !!botRecord, bot: botRecord });
+});
+
+// Admin balance
 app.post('/api/admin/balance', (req, res) => {
   const { admin_id, target_user_id, amount } = req.body;
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
@@ -202,7 +267,7 @@ app.post('/api/admin/balance', (req, res) => {
   res.json({ success: !!user, user });
 });
 
-// Admin: Add or subtract days
+// Admin days
 app.post('/api/admin/days', (req, res) => {
   const { admin_id, target_user_id, days } = req.body;
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
@@ -211,7 +276,7 @@ app.post('/api/admin/days', (req, res) => {
   res.json({ success: !!user, user });
 });
 
-// Admin: Change tariff
+// Admin tariff
 app.post('/api/admin/tariff', (req, res) => {
   const { admin_id, target_user_id, tariff, days } = req.body;
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
@@ -231,7 +296,6 @@ function startServer() {
     console.log(`🚀 HTTP Server ${port}-portda ishga tushdi! (Web App: /webapp)`);
   });
 
-  // 24/7 Keep-alive self-pinging on Render
   if (config.BASE_URL) {
     setInterval(() => {
       https.get(`${config.BASE_URL}/health`, () => {}).on('error', () => {});

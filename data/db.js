@@ -13,6 +13,7 @@ function getInitialDB() {
   return {
     users: {},
     sites: {},
+    bots: {},
     payments: {},
     settings: {
       owner_id: config.OWNER_ID,
@@ -30,6 +31,7 @@ function loadDB() {
     if (fs.existsSync(DB_FILE)) {
       const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
       memoryDB = { ...getInitialDB(), ...data };
+      if (!memoryDB.bots) memoryDB.bots = {};
       return memoryDB;
     }
   } catch (err) {
@@ -164,7 +166,7 @@ const dbManager = {
       saveDB(db);
     } else if (tariffId === 'none' || tariffId === 'free') {
       user.tariff = 'none';
-      user.expires_at = Date.now(); // expired
+      user.expires_at = Date.now();
       saveDB(db);
     }
     return user;
@@ -253,17 +255,79 @@ const dbManager = {
     }
   },
 
+  // BOTS
+  createBot(botData) {
+    const db = loadDB();
+    const id = 'bot_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    const newBot = {
+      id,
+      userId: botData.userId,
+      token: botData.token,
+      botType: botData.botType || 'weather',
+      botUsername: botData.botUsername || '',
+      botName: botData.botName || 'Mening Botim',
+      is_active: true,
+      created_at: new Date().toISOString()
+    };
+    db.bots[id] = newBot;
+    saveDB(db);
+    return newBot;
+  },
+
+  getBotsByUser(userId) {
+    const db = loadDB();
+    return Object.values(db.bots || {}).filter(b => String(b.userId) === String(userId));
+  },
+
+  getAllBots() {
+    const db = loadDB();
+    return Object.values(db.bots || {});
+  },
+
+  getBot(id) {
+    const db = loadDB();
+    return db.bots[id] || null;
+  },
+
+  toggleBotStatus(botId, isActive) {
+    const db = loadDB();
+    if (db.bots && db.bots[botId]) {
+      db.bots[botId].is_active = typeof isActive === 'boolean' ? isActive : !db.bots[botId].is_active;
+      saveDB(db);
+      return db.bots[botId];
+    }
+    return null;
+  },
+
+  deleteBot(botId, userId = null) {
+    const db = loadDB();
+    if (db.bots && db.bots[botId]) {
+      if (userId && String(db.bots[botId].userId) !== String(userId)) {
+        return false;
+      }
+      delete db.bots[botId];
+      saveDB(db);
+      return true;
+    }
+    return false;
+  },
+
   getStats() {
     const db = loadDB();
     const users = Object.values(db.users);
     const sites = Object.values(db.sites);
     const activeSites = sites.filter(s => s.is_active);
+    const bots = Object.values(db.bots || {});
+    const activeBots = bots.filter(b => b.is_active);
 
     return {
       totalUsers: users.length,
       totalSites: sites.length,
       activeSites: activeSites.length,
-      inactiveSites: sites.length - activeSites.length
+      inactiveSites: sites.length - activeSites.length,
+      totalBots: bots.length,
+      activeBots: activeBots.length,
+      inactiveBots: bots.length - activeBots.length
     };
   }
 };
