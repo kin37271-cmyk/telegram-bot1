@@ -62,43 +62,82 @@ const dbManager = {
 
   getOrCreateUser(userId, profile = {}) {
     const db = loadDB();
-    if (!db.users[userId]) {
+    const strId = String(userId);
+    if (!db.users[strId]) {
       const trialDays = config.TRIAL_DAYS || 3;
       const expiresAt = Date.now() + (trialDays * 24 * 60 * 60 * 1000);
 
-      db.users[userId] = {
+      db.users[strId] = {
         id: userId,
         name: profile.name || 'Foydalanuvchi',
         username: profile.username || '',
+        phone: profile.phone || '',
+        photo_url: profile.photo_url || '',
         balance: 0,
         tariff: 'trial',
         trial_used: true,
         expires_at: expiresAt,
         is_blocked: false,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        last_active: new Date().toISOString()
       };
       saveDB(db);
     } else {
       let changed = false;
-      if (profile.name && db.users[userId].name !== profile.name) {
-        db.users[userId].name = profile.name;
+      const u = db.users[strId];
+      if (profile.name && u.name !== profile.name) {
+        u.name = profile.name;
         changed = true;
       }
-      if (profile.username && db.users[userId].username !== profile.username) {
-        db.users[userId].username = profile.username;
+      if (profile.username && u.username !== profile.username) {
+        u.username = profile.username;
         changed = true;
       }
+      if (profile.phone && u.phone !== profile.phone) {
+        u.phone = profile.phone;
+        changed = true;
+      }
+      if (profile.photo_url && u.photo_url !== profile.photo_url) {
+        u.photo_url = profile.photo_url;
+        changed = true;
+      }
+      u.last_active = new Date().toISOString();
+      changed = true;
       if (changed) saveDB(db);
     }
-    return db.users[userId];
+    return db.users[strId];
+  },
+
+  setUserPhone(userId, phone) {
+    const db = loadDB();
+    const strId = String(userId);
+    if (db.users[strId]) {
+      db.users[strId].phone = String(phone).trim();
+      db.users[strId].last_active = new Date().toISOString();
+      saveDB(db);
+      return db.users[strId];
+    }
+    return null;
+  },
+
+  setUserPhoto(userId, photoUrl) {
+    const db = loadDB();
+    const strId = String(userId);
+    if (db.users[strId]) {
+      db.users[strId].photo_url = photoUrl;
+      saveDB(db);
+      return db.users[strId];
+    }
+    return null;
   },
 
   updateUser(userId, data) {
     const db = loadDB();
-    if (db.users[userId]) {
-      db.users[userId] = { ...db.users[userId], ...data };
+    const strId = String(userId);
+    if (db.users[strId]) {
+      db.users[strId] = { ...db.users[strId], ...data, last_active: new Date().toISOString() };
       saveDB(db);
-      return db.users[userId];
+      return db.users[strId];
     }
     return null;
   },
@@ -136,9 +175,11 @@ const dbManager = {
 
   addBalance(userId, amount) {
     const db = loadDB();
-    const user = db.users[userId];
+    const strId = String(userId);
+    const user = db.users[strId];
     if (!user) return null;
     user.balance = Math.max(0, (user.balance || 0) + Number(amount));
+    user.last_active = new Date().toISOString();
     saveDB(db);
     return user;
   },
@@ -320,15 +361,101 @@ const dbManager = {
     const bots = Object.values(db.bots || {});
     const activeBots = bots.filter(b => b.is_active);
 
+    const detailedUsers = this.getAllUsersDetailed();
+    const veryActiveCount = detailedUsers.filter(u => u.activity_level === 'very_active').length;
+    const activeCount = detailedUsers.filter(u => u.activity_level === 'active').length;
+    const newCount = detailedUsers.filter(u => u.activity_level === 'new').length;
+    const totalBalance = users.reduce((sum, u) => sum + (u.balance || 0), 0);
+
     return {
       totalUsers: users.length,
+      veryActiveUsers: veryActiveCount,
+      activeUsers: activeCount,
+      newUsers: newCount,
       totalSites: sites.length,
       activeSites: activeSites.length,
       inactiveSites: sites.length - activeSites.length,
       totalBots: bots.length,
       activeBots: activeBots.length,
-      inactiveBots: bots.length - activeBots.length
+      inactiveBots: bots.length - activeBots.length,
+      totalBalance
     };
+  },
+
+  calculateUserScore(user, bots, sites) {
+    const activeBots = bots.filter(b => b.is_active).length;
+    const activeSites = sites.filter(s => s.is_active).length;
+    const balanceScore = Math.min(100, Math.floor((user.balance || 0) / 1000));
+    const tariffScore = (user.tariff && user.tariff !== 'trial' && user.tariff !== 'none') ? 50 : 10;
+
+    const score = (bots.length * 30) + (activeBots * 20) + (sites.length * 25) + (activeSites * 15) + balanceScore + tariffScore;
+
+    let activity_level = 'new';
+    let activity_label = '🌱 Yangi Mijoz';
+    let activity_badge = 'bg-slate-800 text-slate-300';
+
+    if (score >= 45 || activeBots > 0 || bots.length >= 2 || (user.balance || 0) >= 20000) {
+      activity_level = 'very_active';
+      activity_label = '🔥 Juda Faol';
+      activity_badge = 'bg-red-500/20 text-red-400 border border-red-500/30';
+    } else if (score >= 20 || bots.length > 0 || sites.length > 0) {
+      activity_level = 'active';
+      activity_label = '⚡ Faol Mijoz';
+      activity_badge = 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
+    }
+
+    return { score, activity_level, activity_label, activity_badge, activeBots, activeSites };
+  },
+
+  getAllUsersDetailed() {
+    const db = loadDB();
+    const users = Object.values(db.users);
+
+    const detailed = users.map(u => {
+      const bots = Object.values(db.bots || {}).filter(b => String(b.userId) === String(u.id));
+      const sites = Object.values(db.sites || {}).filter(s => String(s.userId) === String(u.id));
+      const remaining = this.getRemainingTime(u.id);
+      const metrics = this.calculateUserScore(u, bots, sites);
+
+      // Default photo fallback
+      const photo = u.photo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'User')}&background=1e293b&color=38bdf8&bold=true`;
+
+      return {
+        id: u.id,
+        name: u.name || 'Foydalanuvchi',
+        username: u.username || '',
+        phone: u.phone || '',
+        photo_url: photo,
+        balance: u.balance || 0,
+        tariff: u.tariff || 'trial',
+        tariff_name: (config.TARIFFS[u.tariff] || {}).name || u.tariff || 'Sinov',
+        expires_at: u.expires_at,
+        is_expired: remaining.isExpired,
+        remaining_text: remaining.text,
+        remaining_days: remaining.days,
+        created_at: u.created_at,
+        last_active: u.last_active || u.created_at,
+        bots,
+        sites,
+        bots_count: bots.length,
+        active_bots_count: metrics.activeBots,
+        sites_count: sites.length,
+        active_sites_count: metrics.activeSites,
+        score: metrics.score,
+        activity_level: metrics.activity_level,
+        activity_label: metrics.activity_label,
+        activity_badge: metrics.activity_badge
+      };
+    });
+
+    // Sort by score descending (Rating)
+    detailed.sort((a, b) => b.score - a.score || b.balance - a.balance);
+
+    // Assign ranking #1, #2, ...
+    return detailed.map((u, idx) => ({
+      ...u,
+      rank: idx + 1
+    }));
   }
 };
 

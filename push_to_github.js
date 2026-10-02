@@ -95,7 +95,7 @@ async function main() {
   await deleteOldFile('requirements.txt');
 
   // 2. Yangi loyiha fayllarini yuklash
-  const files = getAllFiles('C:\\Users\\user\\Desktop\\bot yarati');
+  const files = getAllFiles(__dirname);
   console.log(`📦 Jami yuklanadigan fayllar soni: ${files.length} ta`);
 
   for (const f of files) {

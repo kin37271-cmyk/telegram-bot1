@@ -55,9 +55,13 @@ app.get(['/site/:slug', '/s/:slug'], (req, res) => {
 
 // ===================== REST API =====================
 
-// 1. Templates
+// 1. Templates (Saytlar & Botlar)
 app.get('/api/templates', (req, res) => {
   res.json(TEMPLATES);
+});
+
+app.get('/api/bot-templates', (req, res) => {
+  res.json(botManager.BOT_TEMPLATES || []);
 });
 
 // 2. User info
@@ -67,15 +71,20 @@ app.get('/api/me', (req, res) => {
 
   const name = req.query.name || 'Foydalanuvchi';
   const username = req.query.username || '';
-  const user = db.getOrCreateUser(userId, { name, username });
+  const photoUrl = req.query.photo_url || '';
+  const user = db.getOrCreateUser(userId, { name, username, photo_url: photoUrl });
 
   const remaining = db.getRemainingTime(userId);
   const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const detailedUsers = db.getAllUsersDetailed();
+  const detailed = detailedUsers.find(u => String(u.id) === String(userId)) || {};
 
   res.json({
     id: user.id,
     name: user.name,
     username: user.username,
+    phone: user.phone || '',
+    photo_url: user.photo_url || detailed.photo_url,
     balance: user.balance || 0,
     tariff: user.tariff,
     tariff_name: tariffObj.name,
@@ -84,8 +93,22 @@ app.get('/api/me', (req, res) => {
     remaining_text: remaining.text,
     remaining_days: remaining.days,
     is_admin: String(userId) === String(config.OWNER_ID),
+    score: detailed.score || 0,
+    activity_level: detailed.activity_level || 'new',
+    activity_label: detailed.activity_label || '🌱 Yangi Mijoz',
+    rank: detailed.rank || detailedUsers.length,
     tariffs: config.TARIFFS
   });
+});
+
+// 2.1 Update user phone
+app.post('/api/user/phone', (req, res) => {
+  const { user_id, phone } = req.body;
+  if (!user_id || !phone) {
+    return res.status(400).json({ success: false, message: 'user_id va phone kiritilishi shart' });
+  }
+  const updated = db.setUserPhone(user_id, phone);
+  res.json({ success: !!updated, user: updated });
 });
 
 // 3. User's sites
@@ -164,6 +187,30 @@ app.post('/api/bots', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Foydalanuvchi va token kiritilishi shart' });
   }
 
+  const user = db.getUser(userId);
+  if (!user) {
+    return res.status(400).json({ success: false, message: 'Foydalanuvchi topilmadi' });
+  }
+
+  const remaining = db.getRemainingTime(userId);
+  if (remaining.isExpired && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Tarifingiz muddati tugagan! Yangi bot yaratish uchun obunani uzaytiring yoki balansni to\'ldiring.'
+    });
+  }
+
+  const userBots = db.getBotsByUser(userId);
+  const tariff = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const maxAllowed = tariff.maxBots || 1;
+
+  if (userBots.length >= maxAllowed && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({
+      success: false,
+      message: `Oddiy mijozlar va "${tariff.name}" tarifida ko'pi bilan ${maxAllowed} ta bot yaratish mumkin! Sizda allaqachon ${userBots.length} ta bot mavjud. Ko'proq bot yaratish uchun tarifni oshiring!`
+    });
+  }
+
   const cleanToken = token.trim();
   const verify = await botManager.verifyToken(cleanToken);
   if (!verify.valid) {
@@ -200,6 +247,31 @@ app.delete('/api/bots/:id', (req, res) => {
   res.json({ success });
 });
 
+// 8.1 Toggle bot status (Active / Inactive) for owner & admin
+app.post('/api/bots/:id/toggle', async (req, res) => {
+  const botId = req.params.id;
+  const userId = req.body.userId || req.query.user_id;
+  if (!userId) return res.status(400).json({ success: false, message: 'userId talab qilinadi' });
+
+  const botRecord = db.getBot(botId);
+  if (!botRecord) return res.status(404).json({ success: false, message: 'Bot topilmadi' });
+
+  if (String(botRecord.userId) !== String(userId) && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({ success: false, message: 'Ruxsat berilmagan' });
+  }
+
+  const updated = db.toggleBotStatus(botId);
+  if (updated) {
+    if (updated.is_active) {
+      await botManager.startBot(updated);
+    } else {
+      botManager.stopBot(updated.id);
+    }
+    return res.json({ success: true, bot: updated });
+  }
+  res.status(500).json({ success: false, message: 'Holatni o\'zgartirib bo\'lmadi' });
+});
+
 // ===================== ADMIN API =====================
 
 function isAdmin(adminId) {
@@ -213,24 +285,27 @@ app.get('/api/admin/stats', (req, res) => {
   res.json(stats);
 });
 
-// Admin users
+// Admin users with full rating, photo, phone, and metrics
 app.get('/api/admin/users', (req, res) => {
   if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+  const users = db.getAllUsersDetailed();
+  res.json(users);
+});
 
-  const users = db.getAllUsers();
-  const result = users.map(u => {
-    const sites = db.getSitesByUser(u.id);
-    const bots = db.getBotsByUser(u.id);
-    const remaining = db.getRemainingTime(u.id);
-    return {
-      ...u,
-      sites,
-      bots,
-      remaining_text: remaining.text,
-      is_expired: remaining.isExpired
-    };
-  });
-  res.json(result);
+// Admin rating
+app.get('/api/admin/rating', (req, res) => {
+  if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+  const users = db.getAllUsersDetailed();
+  res.json(users);
+});
+
+// Admin update user phone
+app.post('/api/admin/phone', (req, res) => {
+  const { admin_id, target_user_id, phone } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const user = db.setUserPhone(target_user_id, phone);
+  res.json({ success: !!user, user });
 });
 
 // Admin toggle site

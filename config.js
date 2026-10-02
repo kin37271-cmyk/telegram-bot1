@@ -20,40 +20,45 @@ module.exports = {
       name: '🎁 3 Kunlik Bepul Sinov',
       price: 0,
       days: 3,
+      maxBots: 1,
       maxSites: 1,
-      description: 'Yangi foydalanuvchilar uchun 3 kun bepul sinov (1 ta sayt)'
+      description: 'Oddiy mijozlar uchun 3 kun bepul sinov (1 ta bot & 1 ta sayt)'
     },
     starter: {
       id: 'starter',
       name: '🌱 Starter (1 Oylik)',
       price: 15000,
       days: 30,
+      maxBots: 3,
       maxSites: 3,
-      description: '3 tagacha zamonaviy sayt, 30 kun davomida 24/7 avto hosting'
+      description: '3 tagacha Telegram bot & 3 ta sayt, 30 kun 24/7 avto hosting'
     },
     pro: {
       id: 'pro',
       name: '⭐ Pro Standart (1 Oylik)',
       price: 25000,
       days: 30,
+      maxBots: 10,
       maxSites: 10,
-      description: '10 tagacha sayt, yuqori tezlik, VIP qo\'llab-quvvatlash'
+      description: '10 tagacha bot & 10 ta sayt, yuqori tezlik, VIP qo\'llab-quvvatlash'
     },
     business: {
       id: 'business',
       name: '💼 Business (3 Oylik)',
       price: 60000,
       days: 90,
+      maxBots: 25,
       maxSites: 25,
-      description: '25 tagacha sayt, 3 oy 24/7 faol, maxsus chegirma'
+      description: '25 tagacha bot & 25 ta sayt, 3 oy 24/7 faol, maxsus chegirma'
     },
     vip: {
       id: 'vip',
       name: '👑 VIP Lifetime (Umrbod)',
       price: 150000,
       days: 3650,
+      maxBots: 999,
       maxSites: 999,
-      description: 'Cheksiz saytlar, bir marta to\'lab umrbod 24/7 bepul hosting'
+      description: 'Cheksiz botlar va saytlar, bir marta to\'lab umrbod 24/7 bepul hosting'
     }
   }
 };

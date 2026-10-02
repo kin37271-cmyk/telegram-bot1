@@ -26,11 +26,14 @@ function isAdmin(userId) {
 
 // ==================== DOIMIY PASTKI KLAVIATURA TUGMALARI (REPLY KEYBOARD) ====================
 
+// ==================== DOIMIY PASTKI KLAVIATURA TUGMALARI (REPLY KEYBOARD) ====================
+
 // 1. Asosiy Menyu Tugmalari (Pastdagi doimiy tugmalar)
 function getMainMenuKeyboard(userId) {
   const rows = [
     ['🤖 Bot Yaratish'],
-    ['📋 Mening Botlarim', '⏳ Tarifim & Qolgan Vaqt'],
+    ['📋 Mening Botlarim', '🌐 Web App'],
+    ['👤 Mening Profilim', '⏳ Tarifim & Qolgan Vaqt'],
     ['💳 Balans & To\'lov', '📞 Aloqa / Yordam']
   ];
   if (isAdmin(userId)) {
@@ -39,12 +42,16 @@ function getMainMenuKeyboard(userId) {
   return Markup.keyboard(rows).resize();
 }
 
-// 2. Bot Yo'nalishlari Tugmalari
+// 2. 16 ta Bot Yo'nalishlari Tugmalari (Reply Keyboard)
 const botTypesKeyboard = Markup.keyboard([
   ['🌦 Ob-havo Boti', '🕌 Namoz Vaqtlari'],
   ['💵 Valyuta Kurslari', '📱 QR Kod Boti'],
   ['🤖 ChatGPT / AI Boti', '🔤 Tarjimon Boti'],
   ['🎬 Kino Topuvchi', '📢 Kanal & Avto-Post'],
+  ['🎭 Anonim Chat Boti', '📥 Video Yuklovchi'],
+  ['🎵 Musiqa Qidiruvchi', '🔮 Munajjimlar'],
+  ['🧠 Viktorina & Test', '📝 Bloknot & Qaydlar'],
+  ['🧮 Aqlli Kalkulyator', '📨 Taklif & Murojaat'],
   ['⬅️ Asosiy Menyu']
 ]).resize();
 
@@ -53,64 +60,94 @@ const cancelKeyboard = Markup.keyboard([
   ['❌ Bekor qilish']
 ]).resize();
 
-// 4. Admin Panel Tugmalari
-const adminMenuKeyboard = Markup.keyboard([
-  ['📊 Statistika', '👥 Foydalanuvchilar'],
+// 4. Profil tugmalari (Telefon raqamni ulashish)
+const profileKeyboard = Markup.keyboard([
+  [Markup.button.contactRequest('📱 Telefon Raqamni Ulashish')],
   ['⬅️ Asosiy Menyu']
 ]).resize();
 
-// Middleware
+// 5. Admin Panel Tugmalari
+const adminMenuKeyboard = Markup.keyboard([
+  ['📊 Statistika & Faollik', '👥 Foydalanuvchilar'],
+  ['🏆 Mijozlar Reytingi', '⬅️ Asosiy Menyu']
+]).resize();
+
+// Middleware (Profil rasmi va ma'lumotlarni saqlash)
 bot.use(async (ctx, next) => {
   if (ctx.from) {
+    let photoUrl = '';
+    try {
+      const photos = await ctx.telegram.getUserProfilePhotos(ctx.from.id, 0, 1);
+      if (photos && photos.total_count > 0 && photos.photos[0] && photos.photos[0].length > 0) {
+        const fileId = photos.photos[0][0].file_id;
+        const link = await ctx.telegram.getFileLink(fileId);
+        photoUrl = link.href;
+      }
+    } catch (e) {}
+
     db.getOrCreateUser(ctx.from.id, {
       name: ctx.from.first_name || 'Foydalanuvchi',
-      username: ctx.from.username || ''
+      username: ctx.from.username || '',
+      photo_url: photoUrl
     });
   }
   return next();
 });
 
 // ==================== /START BUYRUG'I ====================
-// Post tashlanadi, lekin post ichida inline tugma bo'lmaydi.
-// Tugmalar faqat pastda (Reply Keyboard) chiqadi!
 bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   const name = ctx.from.first_name || 'Foydalanuvchi';
   userStates.delete(userId);
 
-  const user = db.getOrCreateUser(userId, { name, username: ctx.from.username || '' });
+  let photoUrl = '';
+  try {
+    const photos = await ctx.telegram.getUserProfilePhotos(userId, 0, 1);
+    if (photos && photos.total_count > 0 && photos.photos[0] && photos.photos[0].length > 0) {
+      const fileId = photos.photos[0][0].file_id;
+      const link = await ctx.telegram.getFileLink(fileId);
+      photoUrl = link.href;
+    }
+  } catch (e) {}
+
+  const user = db.getOrCreateUser(userId, { name, username: ctx.from.username || '', photo_url: photoUrl });
   const remaining = db.getRemainingTime(userId);
   const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
   const userBots = db.getBotsByUser(userId);
   const activeCount = userBots.filter(b => b.is_active).length;
+  const detailedUsers = db.getAllUsersDetailed();
+  const detailed = detailedUsers.find(u => String(u.id) === String(userId)) || {};
 
   const welcomePost = 
 `🌟 <b>Assalomu alaykum, ${escapeHtml(name)}!</b>
 
-🤖 <b>TELEGRAM BOT MAKER (KONSTRUKTOR)GA XUSH KELIBSIZ!</b>
+🤖 <b>MAKER BOT PLATFORMASI (16-IN-1 BOT KONSTRUKTOR)</b>
 
-Bu yerda siz hech qanday dasturlashsiz, to'g'ridan-to'g'ri bot ichida o'z <b>shaxsiy Telegram botlaringizni</b> yaratishingiz mumkin.
-
-Barcha yaratilgan botlar bizning serverimizda <b>24/7 avtomatik hostingda</b> uzluksiz ishlaydi!
+Bu yerda siz hech qanday dasturlashsiz, to'g'ridan-to'g'ri o'z <b>shaxsiy Telegram botlaringizni</b> 1 daqiqada yaratishingiz mumkin!
+Barcha botlar bizning serverimizda <b>24/7 avtomatik hostingda</b> uzluksiz ishlaydi.
 
 👤 <b>Sizning profilingiz:</b>
 • 🆔 <b>ID:</b> <code>${userId}</code>
+• 📱 <b>Telefon:</b> <b>${user.phone || 'Kiritilmagan'}</b>
 • 🏷 <b>Tarifingiz:</b> <b>${tariffObj.name}</b>
 • ⏳ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>
 • 💰 <b>Balansingiz:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
+• 🏆 <b>Reytingdagi o'rningiz:</b> <b>#${detailed.rank || '1'}</b> (${detailed.activity_label || '🌱 Yangi Mijoz'})
 • 🤖 <b>Botlaringiz:</b> <b>${userBots.length} ta</b> (${activeCount} ta faol)
+
+🌐 <i>Web App va Telegram bot bitta yagona ma'lumotlar bazasida ishlaydi!</i>
 
 <i>Boshlash uchun pastdagi tugmalardan foydalaning 👇</i>`;
 
-  // DIQQAT: Post ichida inline button yo'q! Tugmalar pastki klaviaturada chiqadi!
   await ctx.replyWithHTML(welcomePost, getMainMenuKeyboard(userId));
 });
 
-// ==================== BOT YARATISH BO'LIMI ====================
+// ==================== 16 TA BOT YARATISH BO'LIMI ====================
 bot.hears('🤖 Bot Yaratish', async (ctx) => {
   const userId = ctx.from.id;
   userStates.delete(userId);
 
+  const user = db.getUser(userId) || {};
   const remaining = db.getRemainingTime(userId);
   if (remaining.isExpired && !isAdmin(userId)) {
     return ctx.replyWithHTML(
@@ -119,26 +156,57 @@ bot.hears('🤖 Bot Yaratish', async (ctx) => {
     );
   }
 
+  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const userBots = db.getBotsByUser(userId);
+  const maxBots = tariffObj.maxBots || 1;
+
+  // Oddiy mijozlar uchun 1 ta bot limiti, tarif olinsa ko'proq!
+  if (userBots.length >= maxBots && !isAdmin(userId)) {
+    return ctx.replyWithHTML(
+      `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan!</b>\n\n` +
+      `• Sizning tarifingiz: <b>${tariffObj.name}</b>\n` +
+      `• Ruxsat etilgan botlar: <b>${maxBots} ta</b>\n` +
+      `• Yaratilgan botlaringiz: <b>${userBots.length} ta</b>\n\n` +
+      `Oddiy mijozlar sinov tarifida faqat <b>1 ta bot</b> yarata oladi! Ko'proq bot yaratish uchun tarif sotib oling:\n\n` +
+      `🌱 <b>Starter (1 oylik):</b> 3 ta bot (15,000 so'm)\n` +
+      `⭐ <b>Pro Standart (1 oylik):</b> 10 ta bot (25,000 so'm)\n` +
+      `💼 <b>Business (3 oylik):</b> 25 ta bot (60,000 so'm)\n` +
+      `👑 <b>VIP Lifetime (Umrbod):</b> Cheksiz botlar (150,000 so'm)\n\n` +
+      `<i>Tarif olish uchun pastdagi "💳 Balans & To'lov" tugmasini bosing!</i>`,
+      getMainMenuKeyboard(userId)
+    );
+  }
+
   userStates.set(userId, { step: 'choose_bot_type' });
 
   const text = 
-`🤖 <b>Qanday turdagi Bot yaratmoqchisiz?</b>
+`🤖 <b>Qanday turdagi Bot yaratmoqchisiz? (Jami 16 xil Bot):</b>
 
-Pastdagi klaviatura orqali kerakli bot yo'nalishini tanlang:
+📊 Sizning botlaringiz: <b>${userBots.length}/${maxBots} ta</b> (${tariffObj.name})
 
-1. 🌦 <b>Ob-havo Boti</b> — Shaharlar harorati, namlik, shamol va GPS orqali real vaqtdagi ob-havo
+1. 🌦 <b>Ob-havo Boti</b> — Real vaqtdagi harorat, shamol va GPS ob-havo
 2. 🕌 <b>Namoz Vaqtlari Boti</b> — O'zbekiston viloyatlari bo'yicha aniq namoz vaqtlari
-3. 💵 <b>Valyuta Kurslari Boti</b> — Markaziy bank kursi (USD, EUR, RUB, KZT) va kalkulyator
+3. 💵 <b>Valyuta Kurslari Boti</b> — Markaziy bank kursi (USD, EUR, RUB) va kalkulyator
 4. 📱 <b>QR Kod Boti</b> — Matn, havola yoki telefonni QR-kodga aylantirish
 5. 🤖 <b>ChatGPT / AI Boti</b> — Aqlli savol-javob sun'iy intellekt boti
 6. 🔤 <b>Tarjimon Boti</b> — O'zbek, Rus va Ingliz tillarida tezkor tarjimon
 7. 🎬 <b>Kino Topuvchi Boti</b> — Kod orqali kinolarni topib beruvchi bot
-8. 📢 <b>Kanal & Avto-Post Boti</b> — Kanallarga chiroyli postlar joylash boti`;
+8. 📢 <b>Kanal & Avto-Post Boti</b> — Kanallarga chiroyli postlar joylash boti
+9. 🎭 <b>Anonim Chat Boti</b> — Tasodifiy begona bilan suhbat va maxfiy xabarlar
+10. 📥 <b>Video Yuklovchi</b> — Instagram Reels, TikTok (suvsiz) va YouTube
+11. 🎵 <b>Musiqa Qidiruvchi</b> — Nomi va ijrochi bo'yicha 320kbps musiqa topish
+12. 🔮 <b>Munajjimlar Bashorati</b> — 12 burj uchun kunlik to'liq bashorat
+13. 🧠 <b>Viktorina & Test Boti</b> — Intellektual savollar va ball yig'ish o'yini
+14. 📝 <b>Bloknot & Qaydlar Boti</b> — Shaxsiy rejalar va eslatmalar daftari
+15. 🧮 <b>Aqlli Kalkulyator Boti</b> — Matematik amallar, kredit va foiz hisoblash
+16. 📨 <b>Taklif & Murojaat Boti</b> — Mijozlar murojaatlarini qabul qilish boti
+
+<i>Kerakli bot yo'nalishini pastdagi klaviaturadan tanlang 👇</i>`;
 
   await ctx.replyWithHTML(text, botTypesKeyboard);
 });
 
-// Bot Turi Tanlanganda
+// Bot Turi Tanlanganda (16 ta bot)
 const botTypeMap = {
   '🌦 Ob-havo Boti': { type: 'weather', name: 'Ob-havo Boti' },
   '🕌 Namoz Vaqtlari': { type: 'namoz', name: 'Namoz Vaqtlari Boti' },
@@ -147,14 +215,34 @@ const botTypeMap = {
   '🤖 ChatGPT / AI Boti': { type: 'ai', name: 'ChatGPT / AI Boti' },
   '🔤 Tarjimon Boti': { type: 'translator', name: 'Tarjimon Boti' },
   '🎬 Kino Topuvchi': { type: 'cinema', name: 'Kino Topuvchi Boti' },
-  '📢 Kanal & Avto-Post': { type: 'channel', name: 'Kanal & Avto-Post Boti' }
+  '📢 Kanal & Avto-Post': { type: 'channel', name: 'Kanal & Avto-Post Boti' },
+  '🎭 Anonim Chat Boti': { type: 'anonymous', name: 'Anonim Chat Boti' },
+  '📥 Video Yuklovchi': { type: 'downloader', name: 'Media & Video Yuklovchi' },
+  '🎵 Musiqa Qidiruvchi': { type: 'music', name: 'Musiqa Qidiruvchi Bot' },
+  '🔮 Munajjimlar': { type: 'horoscope', name: 'Munajjimlar Bashorati Boti' },
+  '🧠 Viktorina & Test': { type: 'quiz', name: 'Savol-Javob & Viktorina Boti' },
+  '📝 Bloknot & Qaydlar': { type: 'notes', name: 'Shaxsiy Bloknot Boti' },
+  '🧮 Aqlli Kalkulyator': { type: 'calculator', name: 'Aqlli Kalkulyator Boti' },
+  '📨 Taklif & Murojaat': { type: 'feedback', name: 'Taklif & Murojaat Boti' }
 };
 
 Object.keys(botTypeMap).forEach(key => {
   bot.hears(key, async (ctx) => {
     const userId = ctx.from.id;
-    const selected = botTypeMap[key];
+    const user = db.getUser(userId) || {};
+    const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+    const userBots = db.getBotsByUser(userId);
+    const maxBots = tariffObj.maxBots || 1;
 
+    if (userBots.length >= maxBots && !isAdmin(userId)) {
+      userStates.delete(userId);
+      return ctx.replyWithHTML(
+        `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan (${userBots.length}/${maxBots} ta)!</b>\n\nKo'proq bot yaratish uchun "💳 Balans & To'lov" tugmasi orqali tarifni oshiring!`,
+        getMainMenuKeyboard(userId)
+      );
+    }
+
+    const selected = botTypeMap[key];
     userStates.set(userId, { step: 'awaiting_bot_token', botType: selected.type, botTypeName: selected.name });
 
     const text = 
@@ -178,7 +266,10 @@ bot.hears('📋 Mening Botlarim', async (ctx) => {
   const userId = ctx.from.id;
   userStates.delete(userId);
 
+  const user = db.getUser(userId) || {};
+  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
   const userBots = db.getBotsByUser(userId);
+  const maxBots = tariffObj.maxBots || 1;
 
   if (userBots.length === 0) {
     return ctx.replyWithHTML(
@@ -187,19 +278,228 @@ bot.hears('📋 Mening Botlarim', async (ctx) => {
     );
   }
 
-  let text = `📋 <b>Sizning 24/7 Hostingdagi Botlaringiz (${userBots.length} ta):</b>\n\n`;
+  await ctx.replyWithHTML(
+    `📋 <b>SIZNING 24/7 HOSTINGDAGI BOTLARINGIZ (${userBots.length}/${maxBots} ta):</b>\n\n` +
+    `Har bir botingizni pastdagi tugmalar orqali boshqarishingiz, <b>yoqishingiz</b>, <b>to'xtatishingiz</b> yoki <b>o'chirishingiz</b> mumkin 👇`,
+    getMainMenuKeyboard(userId)
+  );
 
-  userBots.forEach((b, idx) => {
-    const status = b.is_active ? '🟢 Faol (24/7 Online)' : '🔴 To\'xtatilgan';
-    text += `${idx + 1}. <b>${escapeHtml(b.botName)}</b>\n`;
-    text += `   • Havola: @${b.botUsername}\n`;
-    text += `   • Turi: <b>${b.botType.toUpperCase()}</b>\n`;
-    text += `   • Holati: ${status}\n\n`;
-  });
+  for (const b of userBots) {
+    const statusText = b.is_active ? '🟢 Faol (24/7 Onlayn)' : '🔴 To\'xtatilgan';
+    const toggleBtnText = b.is_active ? '⏸ To\'xtatish' : '▶️ Ishga Tushirish';
+    const botCard = 
+`🤖 <b>${escapeHtml(b.botName || 'Mening Botim')}</b>
+🔗 <b>Username:</b> @${b.botUsername}
+🛠 <b>Yo'nalishi:</b> <b>${(b.botType || '').toUpperCase()}</b>
+⚡ <b>Holati:</b> <b>${statusText}</b>`;
 
-  text += `<i>Yangi bot qo'shish uchun "🤖 Bot Yaratish" tugmasini bosing.</i>`;
+    const buttons = [
+      [
+        Markup.button.callback(toggleBtnText, `user_toggle_${b.id}`),
+        Markup.button.callback('🗑 O\'chirish', `user_del_${b.id}`)
+      ],
+      [
+        Markup.button.url(`🚀 @${b.botUsername} ga o'tish`, `https://t.me/${b.botUsername}`)
+      ]
+    ];
 
-  await ctx.replyWithHTML(text, getMainMenuKeyboard(userId));
+    await ctx.replyWithHTML(botCard, Markup.inlineKeyboard(buttons));
+  }
+});
+
+// Botni yoqish / to'xtatish (Toggle active status)
+bot.action(/^user_toggle_(.+)$/, async (ctx) => {
+  const botId = ctx.match[1];
+  const userId = ctx.from.id;
+  const b = db.getBot(botId);
+
+  if (!b) {
+    return ctx.answerCbQuery('Bot topilmadi!', { show_alert: true });
+  }
+
+  if (String(b.userId) !== String(userId) && !isAdmin(userId)) {
+    return ctx.answerCbQuery('Ruxsat berilmagan!', { show_alert: true });
+  }
+
+  const updated = db.toggleBotStatus(botId);
+  if (updated) {
+    if (updated.is_active) {
+      await botManager.startBot(updated);
+      await ctx.answerCbQuery('🟢 Bot 24/7 ishga tushirildi!');
+    } else {
+      botManager.stopBot(updated.id);
+      await ctx.answerCbQuery('🔴 Bot to\'xtatildi!');
+    }
+
+    const statusText = updated.is_active ? '🟢 Faol (24/7 Onlayn)' : '🔴 To\'xtatilgan';
+    const toggleBtnText = updated.is_active ? '⏸ To\'xtatish' : '▶️ Ishga Tushirish';
+
+    const botCard = 
+`🤖 <b>${escapeHtml(updated.botName || 'Mening Botim')}</b>
+🔗 <b>Username:</b> @${updated.botUsername}
+🛠 <b>Yo'nalishi:</b> <b>${(updated.botType || '').toUpperCase()}</b>
+⚡ <b>Holati:</b> <b>${statusText}</b>`;
+
+    const buttons = [
+      [
+        Markup.button.callback(toggleBtnText, `user_toggle_${updated.id}`),
+        Markup.button.callback('🗑 O\'chirish', `user_del_${updated.id}`)
+      ],
+      [
+        Markup.button.url(`🚀 @${updated.botUsername} ga o'tish`, `https://t.me/${updated.botUsername}`)
+      ]
+    ];
+
+    try {
+      await ctx.editMessageText(botCard, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+    } catch (e) {}
+  }
+});
+
+// Botni o'chirishni so'rash (Confirm delete)
+bot.action(/^user_del_(.+)$/, async (ctx) => {
+  const botId = ctx.match[1];
+  const userId = ctx.from.id;
+  const b = db.getBot(botId);
+
+  if (!b) {
+    return ctx.answerCbQuery('Bot topilmadi!', { show_alert: true });
+  }
+
+  if (String(b.userId) !== String(userId) && !isAdmin(userId)) {
+    return ctx.answerCbQuery('Ruxsat berilmagan!', { show_alert: true });
+  }
+
+  const confirmCard = 
+`⚠️ <b>Haqiqatan ham @${b.botUsername} botini butunlay o'chirmoqchimisiz?</b>\n\nBu amalni ortga qaytarib bo'lmaydi.`;
+
+  const buttons = [
+    [
+      Markup.button.callback('✅ Ha, o\'chirilsin', `user_confirm_del_${b.id}`),
+      Markup.button.callback('❌ Bekor qilish', `user_cancel_del_${b.id}`)
+    ]
+  ];
+
+  try {
+    await ctx.editMessageText(confirmCard, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {}
+});
+
+// Botni o'chirishni bekor qilish
+bot.action(/^user_cancel_del_(.+)$/, async (ctx) => {
+  const botId = ctx.match[1];
+  const b = db.getBot(botId);
+  if (!b) return ctx.deleteMessage().catch(()=>{});
+
+  const statusText = b.is_active ? '🟢 Faol (24/7 Onlayn)' : '🔴 To\'xtatilgan';
+  const toggleBtnText = b.is_active ? '⏸ To\'xtatish' : '▶️ Ishga Tushirish';
+
+  const botCard = 
+`🤖 <b>${escapeHtml(b.botName || 'Mening Botim')}</b>
+🔗 <b>Username:</b> @${b.botUsername}
+🛠 <b>Yo'nalishi:</b> <b>${(b.botType || '').toUpperCase()}</b>
+⚡ <b>Holati:</b> <b>${statusText}</b>`;
+
+  const buttons = [
+    [
+      Markup.button.callback(toggleBtnText, `user_toggle_${b.id}`),
+      Markup.button.callback('🗑 O\'chirish', `user_del_${b.id}`)
+    ],
+    [
+      Markup.button.url(`🚀 @${b.botUsername} ga o'tish`, `https://t.me/${b.botUsername}`)
+    ]
+  ];
+
+  try {
+    await ctx.editMessageText(botCard, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {}
+});
+
+// Botni butunlay o'chirish
+bot.action(/^user_confirm_del_(.+)$/, async (ctx) => {
+  const botId = ctx.match[1];
+  const userId = ctx.from.id;
+  const b = db.getBot(botId);
+
+  if (!b) {
+    return ctx.answerCbQuery('Bot topilmadi!', { show_alert: true });
+  }
+
+  if (String(b.userId) !== String(userId) && !isAdmin(userId)) {
+    return ctx.answerCbQuery('Ruxsat berilmagan!', { show_alert: true });
+  }
+
+  const username = b.botUsername;
+  botManager.stopBot(botId);
+  db.deleteBot(botId, userId);
+
+  await ctx.answerCbQuery(`@${username} boti o'chirildi! 🗑`);
+  try {
+    await ctx.editMessageText(`🗑 <b>@${username}</b> boti muvaffaqiyatli o'chirildi va serverdan to'xtatildi.`, { parse_mode: 'HTML' });
+  } catch (e) {}
+});
+
+// ==================== WEB APP TUGMASI (YAGONA BAZA) ====================
+bot.hears(['🌐 Web App', '🌐 Web App-ni Ochish', '/webapp'], async (ctx) => {
+  const userId = ctx.from.id;
+  userStates.delete(userId);
+  const webAppUrl = `${config.BASE_URL}/webapp?user_id=${userId}&name=${encodeURIComponent(ctx.from.first_name || 'User')}&username=${encodeURIComponent(ctx.from.username || '')}`;
+
+  const text = 
+`🌐 <b>MAKER BOT WEB APP PLATFORMASI</b>
+
+Barcha yaratilgan botlar va saytlaringiz <b>bitta umumiy bazada</b> saqlanadi!
+Siz botni Telegram orqali yaratsangiz ham Web App da turadi, Web App da yaratsangiz ham Telegramda ko'rinadi!
+
+👇 <b>Web App-ni ochish uchun pastdagi tugmani bosing:</b>`;
+
+  await ctx.replyWithHTML(text, Markup.inlineKeyboard([
+    [Markup.button.webApp('🚀 Web App-ni Ochish (16 xil Bot & 20 xil Sayt)', webAppUrl)]
+  ]));
+});
+
+// ==================== SHAXSIY PROFIL & TELEFON RAQAM ====================
+bot.hears('👤 Mening Profilim', async (ctx) => {
+  const userId = ctx.from.id;
+  userStates.delete(userId);
+
+  const user = db.getUser(userId) || {};
+  const remaining = db.getRemainingTime(userId);
+  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const userBots = db.getBotsByUser(userId);
+  const userSites = db.getSitesByUser(userId);
+  const detailedUsers = db.getAllUsersDetailed();
+  const detailed = detailedUsers.find(u => String(u.id) === String(userId)) || {};
+
+  const profileText = 
+`👤 <b>SIZNING SHAXSIY PROFILINGIZ:</b>
+
+• 🆔 <b>ID:</b> <code>${userId}</code>
+• 👤 <b>Ism:</b> ${escapeHtml(user.name || 'Foydalanuvchi')}
+• 🔗 <b>Username:</b> ${user.username ? '@' + escapeHtml(user.username) : 'Mavjud emas'}
+• 📱 <b>Telefon raqam:</b> <b>${user.phone || 'Kiritilmagan'}</b>
+• 💰 <b>Balansingiz:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
+• 🏷 <b>Tarifingiz:</b> <b>${tariffObj.name}</b>
+• ⏳ <b>Qolgan muddat:</b> <b>${remaining.text}</b>
+• 🏆 <b>Reytingdagi o'rningiz:</b> <b>#${detailed.rank || '1'}</b> (${detailed.activity_label || '🌱 Yangi Mijoz'})
+• 🤖 <b>Botlaringiz:</b> <b>${userBots.length} ta</b> (${userBots.filter(b => b.is_active).length} ta faol)
+• 🌐 <b>Saytlaringiz:</b> <b>${userSites.length} ta</b>
+
+${!user.phone ? `<i>💡 Telefon raqamingizni profilingizga qo'shish uchun pastdagi "📱 Telefon Raqamni Ulashish" tugmasini bosing!</i>` : `<i>✅ Telefon raqamingiz tizimda tasdiqlangan.</i>`}`;
+
+  await ctx.replyWithHTML(profileText, profileKeyboard);
+});
+
+// Kontakt qabul qilish (Telefon nomerni avtomatik saqlash)
+bot.on('contact', async (ctx) => {
+  const userId = ctx.from.id;
+  const phone = ctx.message.contact.phone_number;
+  db.setUserPhone(userId, phone);
+
+  await ctx.replyWithHTML(
+    `✅ <b>Rahmat! Telefon raqamingiz muvaffaqiyatli saqlandi:</b>\n📱 <code>${phone}</code>\n\nEndi profilingiz to'liq faollashtirildi va Web App bilan sinxronlandi!`,
+    getMainMenuKeyboard(userId)
+  );
 });
 
 // ==================== TARIF & QOLGAN VAQT ====================
@@ -287,24 +587,43 @@ bot.hears('👑 Admin Panel', async (ctx) => {
   const text = 
 `👑 <b>ADMIN BOSHQARUV PANELI</b>
 
-📊 <b>Umumiy Statistika:</b>
-• 👥 <b>Jami foydalanuvchilar:</b> ${stats.totalUsers} ta
-• 🤖 <b>Jami botlar:</b> ${stats.totalBots} ta (${stats.activeBots} faol)
+📊 <b>Umumiy Mijozlar & Faollik:</b>
+• 👥 <b>Jami mijozlar:</b> <b>${stats.totalUsers} ta</b>
+• 🔥 <b>Juda faol mijozlar:</b> <b>${stats.veryActiveUsers} ta</b>
+• ⚡ <b>O'rtacha faol mijozlar:</b> <b>${stats.activeUsers} ta</b>
+• 🌱 <b>Yangi mijozlar:</b> <b>${stats.newUsers} ta</b>
+• 🤖 <b>Jami botlar:</b> <b>${stats.totalBots} ta</b> (${stats.activeBots} ta 24/7 faol)
+• 🌐 <b>Jami saytlar:</b> <b>${stats.totalSites} ta</b> (${stats.activeSites} ta faol)
+• 💰 <b>Foydalanuvchilar balansi:</b> <b>${stats.totalBalance.toLocaleString()} so'm</b>
 
 Pastdagi tugmalar orqali boshqaring:`;
 
   await ctx.replyWithHTML(text, adminMenuKeyboard);
 });
 
-bot.hears('📊 Statistika', async (ctx) => {
+bot.hears(['📊 Statistika & Faollik', '📊 Statistika'], async (ctx) => {
   const userId = ctx.from.id;
   if (!isAdmin(userId)) return;
 
   const stats = db.getStats();
   const text = 
-`📊 <b>Platforma To'liq Statistikasi:</b>
-• 👥 Foydalanuvchilar: <b>${stats.totalUsers} ta</b>
-• 🤖 Yaratilgan botlar: <b>${stats.totalBots} ta</b> (Faol: ${stats.activeBots} ta)`;
+`📊 <b>Platforma To'liq Statistikasi & Mijozlar Faolligi:</b>
+
+👥 <b>Mijozlar tahlili:</b>
+• Jami ro'yxatdan o'tgan mijozlar: <b>${stats.totalUsers} ta</b>
+• 🔥 <b>Juda faol mijozlar:</b> <b>${stats.veryActiveUsers} ta</b>
+• ⚡ <b>Faol mijozlar:</b> <b>${stats.activeUsers} ta</b>
+• 🌱 <b>Yangi mijozlar:</b> <b>${stats.newUsers} ta</b>
+
+🤖 <b>Botlar holati:</b>
+• Jami yaratilgan botlar: <b>${stats.totalBots} ta</b>
+• 🟢 Hozir 24/7 ishlayotgan botlar: <b>${stats.activeBots} ta</b>
+
+🌐 <b>Saytlar holati:</b>
+• Jami yaratilgan saytlar: <b>${stats.totalSites} ta</b>
+• 🟢 Faol saytlar: <b>${stats.activeSites} ta</b>
+
+💰 Jami tizimdagi balanslar: <b>${stats.totalBalance.toLocaleString()} so'm</b>`;
 
   await ctx.replyWithHTML(text, adminMenuKeyboard);
 });
@@ -313,16 +632,37 @@ bot.hears('👥 Foydalanuvchilar', async (ctx) => {
   const userId = ctx.from.id;
   if (!isAdmin(userId)) return;
 
-  const users = db.getAllUsers().slice(-10).reverse();
-  let text = `👥 <b>Oxirgi 10 ta foydalanuvchi:</b>\n\n`;
+  const users = db.getAllUsersDetailed().slice(0, 10);
+  let text = `👥 <b>Foydalanuvchilar Ro'yxati (Top 10):</b>\n\n`;
 
-  users.forEach(u => {
-    const userBots = db.getBotsByUser(u.id);
-    const rem = db.getRemainingTime(u.id);
-    text += `• <b>${escapeHtml(u.name)}</b> (@${u.username || 'yo\'q'})\n  🆔 ID: <code>${u.id}</code> | Balans: ${(u.balance||0).toLocaleString()} so'm\n  Tarif: ${u.tariff} (${rem.text})\n  Botlar: ${userBots.length} ta\n\n`;
+  users.forEach((u, idx) => {
+    const phoneStr = u.phone ? `📱 ${u.phone}` : '📱 Telefon: yo\'q';
+    text += `<b>${idx + 1}. ${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'usernamesiz'})\n`;
+    text += `   • 🆔 ID: <code>${u.id}</code> | ${phoneStr}\n`;
+    text += `   • 💰 Balans: <b>${(u.balance||0).toLocaleString()} so'm</b> | Tarif: <b>${u.tariff}</b> (${u.remaining_text})\n`;
+    text += `   • 🤖 Botlar: <b>${u.bots_count} ta</b> (${u.active_bots_count} faol) | 🌐 Saytlar: <b>${u.sites_count} ta</b>\n`;
+    text += `   • 🏆 Reyting: <b>#${u.rank}</b> (${u.activity_label})\n\n`;
   });
 
-  text += `<i>Boshqaruv buyruqlari:\n/addmoney ID SUMMA\n/adddays ID KUN\n/settariff ID TARIF\n/togglebot BOT_ID</i>`;
+  text += `<i>Boshqaruv buyruqlari:\n/addmoney ID SUMMA\n/adddays ID KUN\n/settariff ID TARIF\n/setphone ID TEL\n/togglebot BOT_ID</i>`;
+
+  await ctx.replyWithHTML(text, adminMenuKeyboard);
+});
+
+bot.hears('🏆 Mijozlar Reytingi', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return;
+
+  const users = db.getAllUsersDetailed();
+  let text = `🏆 <b>ENG FAOL MIJOZLAR REYTINGI (TOP LIST):</b>\n\n`;
+
+  users.forEach((u) => {
+    const medal = u.rank === 1 ? '🥇' : u.rank === 2 ? '🥈' : u.rank === 3 ? '🥉' : '🎖';
+    text += `${medal} <b>#${u.rank} ${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'ID: ' + u.id})\n`;
+    text += `   • Darajasi: <b>${u.activity_label}</b> (Ball: ${u.score})\n`;
+    text += `   • Botlari: <b>${u.bots_count} ta</b> | Saytlari: <b>${u.sites_count} ta</b> | Balans: <b>${(u.balance||0).toLocaleString()} so'm</b>\n`;
+    text += `   • Telefon: <b>${u.phone || 'yo\'q'}</b>\n\n`;
+  });
 
   await ctx.replyWithHTML(text, adminMenuKeyboard);
 });
@@ -397,6 +737,22 @@ bot.command('togglebot', async (ctx) => {
   }
 });
 
+bot.command('setphone', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const parts = ctx.message.text.split(' ');
+  const targetId = parts[1];
+  const phone = parts[2];
+  if (!targetId || !phone) return ctx.reply('Format: /setphone USER_ID TELEFON');
+
+  const u = db.setUserPhone(targetId, phone);
+  if (u) {
+    ctx.reply(`✅ Foydalanuvchi ${targetId} telefon raqami yangilandi: ${phone}`);
+    bot.telegram.sendMessage(targetId, `📱 Telefon raqamingiz administrator tomonidan biriktirildi: <b>${phone}</b>`, { parse_mode: 'HTML' }).catch(()=>{});
+  } else {
+    ctx.reply('Foydalanuvchi topilmadi.');
+  }
+});
+
 // ==================== INCOMING TEXT (TOKEN INPUT) ====================
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
@@ -407,6 +763,19 @@ bot.on('text', async (ctx) => {
 
   // BOT TOKEN KUTISH BOSQICHI
   if (state.step === 'awaiting_bot_token') {
+    const user = db.getUser(userId) || {};
+    const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+    const userBots = db.getBotsByUser(userId);
+    const maxBots = tariffObj.maxBots || 1;
+
+    if (userBots.length >= maxBots && !isAdmin(userId)) {
+      userStates.delete(userId);
+      return ctx.replyWithHTML(
+        `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan (${userBots.length}/${maxBots} ta)!</b>\n\nOddiy foydalanuvchilar faqat 1 ta bot yarata oladi. Ko'proq bot yaratish uchun tarifni oshiring!`,
+        getMainMenuKeyboard(userId)
+      );
+    }
+
     if (!text.includes(':') || text.length < 35) {
       return ctx.replyWithHTML(
         `❌ <b>Token formati noto'g'ri!</b>\n\n` +
