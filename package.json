@@ -1,15 +1,15 @@
 {
-  "name": "bot-yarati",
-  "version": "1.0.0",
+  "name": "maker-bot-platform",
+  "version": "2.5.0",
+  "description": "Professional 20-in-1 Website & Bot Maker Platform with 24/7 Auto-Hosting, WebApp and Full Admin Panel",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.7",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "localtunnel": "^2.0.2",
-    "qrcode": "^1.5.4",
+    "express": "^4.21.2",
     "telegraf": "^4.16.3"
   }
 }

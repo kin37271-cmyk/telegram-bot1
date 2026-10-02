@@ -1,0 +1,42 @@
+{
+  "users": {
+    "8422157752": {
+      "id": 8422157752,
+      "name": "Ismoil",
+      "username": "ismoiluzb022",
+      "balance": 0,
+      "tariff": "trial",
+      "trial_used": true,
+      "expires_at": 1791193676174,
+      "is_blocked": false,
+      "created_at": "2026-10-02T09:47:56.174Z"
+    }
+  },
+  "sites": {
+    "site_1790934476181_4afmm": {
+      "id": "site_1790934476181_4afmm",
+      "slug": "rayhon-milliy-taomlar-adzf",
+      "userId": 8422157752,
+      "templateId": "restaurant",
+      "title": "Rayhon Milliy Taomlar",
+      "description": "Toshkentdagi eng mashhur milliy taomlar restorani",
+      "phone": "+998901234567",
+      "telegram": "@ismoiluzb022",
+      "instagram": "",
+      "address": "",
+      "bannerUrl": "",
+      "services": [],
+      "priceRange": "",
+      "is_active": true,
+      "views": 0,
+      "created_at": "2026-10-02T09:47:56.182Z",
+      "updated_at": "2026-10-02T09:47:56.182Z"
+    }
+  },
+  "payments": {},
+  "settings": {
+    "owner_id": 8422157752,
+    "card_number": "6262 7201 2331 5395",
+    "card_holder": "@ismoiluzb022"
+  }
+}

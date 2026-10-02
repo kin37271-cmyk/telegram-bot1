@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="uz" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Maker Bot — 20-in-1 Sayt Konstruktori</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'sans-serif'],
+            heading: ['Space Grotesk', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
+    .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .glass-nav { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); border-top: 1px solid rgba(255, 255, 255, 0.08); }
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen pb-24 selection:bg-blue-600 selection:text-white">
+
+  <!-- Top App Bar -->
+  <header class="sticky top-0 z-40 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2.5">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-500/20">
+        ⚡
+      </div>
+      <div>
+        <h1 class="font-bold text-sm tracking-tight text-white leading-tight">MAKER BOT</h1>
+        <p class="text-[11px] text-slate-400">20-in-1 Sayt Konstruktori</p>
+      </div>
+    </div>
+
+    <!-- User Header Pill -->
+    <div id="userHeaderBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs">
+      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+      <span id="headerTariffName" class="font-medium text-slate-300">Sinov</span>
+      <span id="headerDaysLeft" class="text-blue-400 font-semibold">...</span>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="max-w-xl mx-auto px-4 pt-4">
+
+    <!-- TAB 1: SAYT YARATISH -->
+    <section id="tab-create" class="tab-content">
+      <!-- Banner -->
+      <div class="relative overflow-hidden rounded-2xl bg-gradient-to-r from-blue-900/40 via-indigo-900/40 to-slate-900 border border-blue-500/20 p-5 mb-5 shadow-xl">
+        <div class="relative z-10">
+          <span class="inline-block px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-400 text-[11px] font-bold mb-2">
+            🚀 AVTO 24/7 HOSTING
+          </span>
+          <h2 class="text-xl font-bold text-white font-heading">20 xil zamonaviy sayt yarating</h2>
+          <p class="text-slate-300 text-xs mt-1 leading-relaxed">
+            Shablonni tanlang, ma'lumotlaringizni kiriting va 1 daqiqada tayyor 24/7 saytga ega bo'ling!
+          </p>
+        </div>
+      </div>
+
+      <!-- Categories Filter -->
+      <div class="flex gap-2 overflow-x-auto pb-3 mb-4 custom-scrollbar text-xs font-medium">
+        <button onclick="filterTemplates('all')" class="category-btn active px-3.5 py-1.5 rounded-xl bg-blue-600 text-white whitespace-nowrap">Barchasi (20)</button>
+        <button onclick="filterTemplates('Shaxsiy')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Shaxsiy</button>
+        <button onclick="filterTemplates('Ovqatlanish')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Ovqatlanish</button>
+        <button onclick="filterTemplates('Savdo')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Savdo</button>
+        <button onclick="filterTemplates('Xizmatlar')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Xizmatlar</button>
+        <button onclick="filterTemplates('Ta\'lim')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Ta'lim</button>
+        <button onclick="filterTemplates('Tibbiyot')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Tibbiyot</button>
+        <button onclick="filterTemplates('Biznes')" class="category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap">Biznes</button>
+      </div>
+
+      <!-- Templates Grid -->
+      <div id="templatesList" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
+
+    <!-- TAB 2: MENING SAYTLARIM -->
+    <section id="tab-mysites" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-bold text-white font-heading">Mening Saytlarim</h2>
+          <p class="text-xs text-slate-400">Yaratilgan barcha 24/7 faol saytlaringiz</p>
+        </div>
+        <button onclick="switchTab('create')" class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1 shadow-md">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Yangi Sayt
+        </button>
+      </div>
+
+      <div id="mySitesList" class="space-y-3">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
+
+    <!-- TAB 3: TARIF & HISOB (NECHA KUN QOLDI) -->
+    <section id="tab-tariff" class="tab-content hidden">
+      <h2 class="text-lg font-bold text-white font-heading mb-1">Tarif & Obuna Holati</h2>
+      <p class="text-xs text-slate-400 mb-4">Muddatingiz va faol tarifingizni kuzating</p>
+
+      <!-- Active Status Card -->
+      <div class="glass-card rounded-2xl p-5 mb-5 relative overflow-hidden border border-blue-500/20">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <span class="text-xs text-slate-400 font-medium">Joriy tarifingiz:</span>
+            <h3 id="currentTariffTitle" class="text-xl font-bold text-white mt-0.5">Yuklanmoqda...</h3>
+          </div>
+          <span id="currentStatusBadge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            Faol 🟢
+          </span>
+        </div>
+
+        <div class="bg-slate-900/80 rounded-xl p-3.5 border border-slate-800 flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
+              <i data-lucide="clock" class="w-5 h-5"></i>
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Qolgan vaqt:</div>
+              <div id="countdownText" class="text-base font-bold text-white">...</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-[11px] text-slate-400">Balans:</div>
+            <div id="currentBalanceText" class="text-base font-bold text-emerald-400">0 so'm</div>
+          </div>
+        </div>
+
+        <button onclick="switchTab('pay')" class="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition shadow-lg shadow-blue-600/30">
+          💳 Balansni to'ldirish & Tarifni uzaytirish
+        </button>
+      </div>
+
+      <!-- Tariffs Catalog -->
+      <h3 class="text-sm font-bold text-slate-300 mb-3">Mavjud Tarif Rejalari</h3>
+      <div class="space-y-3 mb-6" id="tariffsCatalog">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
+
+    <!-- TAB 4: TO'LOV -->
+    <section id="tab-pay" class="tab-content hidden">
+      <h2 class="text-lg font-bold text-white font-heading mb-1">Hisobni To'ldirish</h2>
+      <p class="text-xs text-slate-400 mb-4">Tarif sotib olish uchun to'lov rekvizitlari</p>
+
+      <div class="glass-card rounded-2xl p-5 mb-5 border border-slate-800">
+        <div class="text-xs text-slate-400 mb-1">To'lov kartasi:</div>
+        <div class="flex items-center justify-between bg-slate-900 rounded-xl p-3 border border-slate-800 mb-3">
+          <span id="payCardNumber" class="text-base font-mono font-bold text-white tracking-wider">6262 7201 2331 5395</span>
+          <button onclick="copyCard()" class="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center gap-1">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i> Nusxa
+          </button>
+        </div>
+        <div class="text-xs text-slate-400 flex items-center justify-between">
+          <span>Karta egasi:</span>
+          <strong id="payCardHolder" class="text-slate-200">@ismoiluzb022</strong>
+        </div>
+      </div>
+
+      <div class="bg-blue-950/40 border border-blue-500/20 rounded-2xl p-4 text-xs text-slate-300 space-y-2 mb-6">
+        <div class="font-bold text-blue-400 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-4 h-4"></i> To'lov qilish tartibi:
+        </div>
+        <p>1. Yuqoridagi karta raqamiga kerakli tarif summasini o'tkazing (masalan, 15,000 yoki 25,000 so'm).</p>
+        <p>2. To'lov chekini skrinshot qilib oling.</p>
+        <p>3. Telegramdagi <strong>@MakerrUzbBot</strong> botiga chekni yuboring.</p>
+        <p>4. Administrator tekshirib darhol balansingizga pul yoki tarifni biriktirib beradi!</p>
+      </div>
+
+      <a href="https://t.me/MakerrUzbBot" target="_blank" class="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm shadow-xl shadow-blue-600/30">
+        <i data-lucide="send" class="w-4 h-4"></i> Telegram Botga Chek Yuborish
+      </a>
+    </section>
+
+    <!-- TAB 5: ADMIN PANEL (FAKAT ADMIN UCHUN) -->
+    <section id="tab-admin" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-bold text-white font-heading">👑 Admin Boshqaruv Paneli</h2>
+          <p class="text-xs text-slate-400">Foydalanuvchilar, saytlar va tariflar nazorati</p>
+        </div>
+        <span class="px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 text-[11px] font-bold border border-red-500/30">
+          Admin
+        </span>
+      </div>
+
+      <!-- Stats Grid -->
+      <div class="grid grid-cols-3 gap-2.5 mb-5" id="adminStats">
+        <div class="glass-card rounded-xl p-3 text-center">
+          <div id="statTotalUsers" class="text-xl font-bold text-white font-heading">0</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Foydalanuvchi</div>
+        </div>
+        <div class="glass-card rounded-xl p-3 text-center">
+          <div id="statTotalSites" class="text-xl font-bold text-blue-400 font-heading">0</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Jami Saytlar</div>
+        </div>
+        <div class="glass-card rounded-xl p-3 text-center">
+          <div id="statActiveSites" class="text-xl font-bold text-emerald-400 font-heading">0</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Faol Saytlar</div>
+        </div>
+      </div>
+
+      <!-- Users Search -->
+      <div class="relative mb-4">
+        <input type="text" id="adminUserSearch" oninput="filterAdminUsers()" placeholder="Foydalanuvchi qidirish (ID, Ism, Username)..." class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+      </div>
+
+      <!-- Users List -->
+      <div id="adminUsersList" class="space-y-3">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Create Site Modal -->
+  <div id="createSiteModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+        <div>
+          <h3 id="modalTemplateName" class="font-bold text-base text-white">Yangi Sayt Yaratish</h3>
+          <p class="text-xs text-slate-400">24/7 bepul avto hosting bilan ishga tushadi</p>
+        </div>
+        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center hover:text-white">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form id="createSiteForm" onsubmit="submitCreateSite(event)" class="space-y-3.5 text-xs">
+        <input type="hidden" id="formTemplateId" value="portfolio">
+
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Sayt / Biznes nomi *</label>
+          <input type="text" id="formTitle" required placeholder="Masalan: Milliy Taomlar Chilonzor" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Qisqacha ta'rif *</label>
+          <textarea id="formDescription" required rows="2" placeholder="Masalan: Toshkentdagi eng mazali taomlar va tezkor yetkazish..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-blue-500"></textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Telefon raqam *</label>
+            <input type="text" id="formPhone" required placeholder="+998901234567" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Telegram (@username)</label>
+            <input type="text" id="formTelegram" placeholder="@user" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Manzil / Lokatsiya</label>
+          <input type="text" id="formAddress" placeholder="Masalan: Toshkent sh., Chilonzor 9-kvartal" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Xizmatlar / Mahsulotlar (vergul bilan)</label>
+          <input type="text" id="formServices" placeholder="Osh, Manti, Shashlik, Yetkazish" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+
+        <button type="submit" id="btnSubmitSite" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition shadow-lg shadow-blue-600/30 mt-4 flex items-center justify-center gap-2">
+          <span>🚀 Saytni 24/7 Ishga Tushirish</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="fixed bottom-0 left-0 right-0 z-40 glass-nav px-2 py-2 flex items-center justify-around max-w-xl mx-auto">
+    <button onclick="switchTab('create')" id="nav-create" class="nav-btn active flex flex-col items-center gap-1 text-blue-500 text-[10px] font-semibold py-1 px-2.5">
+      <i data-lucide="layout-grid" class="w-5 h-5"></i>
+      <span>Shablonlar</span>
+    </button>
+    <button onclick="switchTab('mysites')" id="nav-mysites" class="nav-btn flex flex-col items-center gap-1 text-slate-400 text-[10px] font-medium py-1 px-2.5">
+      <i data-lucide="folder" class="w-5 h-5"></i>
+      <span>Saytlarim</span>
+    </button>
+    <button onclick="switchTab('tariff')" id="nav-tariff" class="nav-btn flex flex-col items-center gap-1 text-slate-400 text-[10px] font-medium py-1 px-2.5">
+      <i data-lucide="sparkles" class="w-5 h-5"></i>
+      <span>Tarifim</span>
+    </button>
+    <button onclick="switchTab('pay')" id="nav-pay" class="nav-btn flex flex-col items-center gap-1 text-slate-400 text-[10px] font-medium py-1 px-2.5">
+      <i data-lucide="credit-card" class="w-5 h-5"></i>
+      <span>To'lov</span>
+    </button>
+    <button onclick="switchTab('admin')" id="nav-admin" class="nav-btn hidden flex flex-col items-center gap-1 text-red-400 text-[10px] font-bold py-1 px-2.5">
+      <i data-lucide="shield-check" class="w-5 h-5"></i>
+      <span>Admin</span>
+    </button>
+  </nav>
+
+  <!-- JavaScript Application Logic -->
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.expand();
+      tg.ready();
+    }
+
+    // Identify user from Telegram WebApp initDataUnsafe or URL query params
+    const urlParams = new URLSearchParams(window.location.search);
+    const userId = (tg?.initDataUnsafe?.user?.id) || urlParams.get('user_id') || '8422157752';
+    const userName = (tg?.initDataUnsafe?.user?.first_name) || urlParams.get('name') || 'Foydalanuvchi';
+    const userUsername = (tg?.initDataUnsafe?.user?.username) || urlParams.get('username') || '';
+
+    let templates = [];
+    let mySites = [];
+    let userData = null;
+    let allUsersAdmin = [];
+    let currentFilter = 'all';
+
+    async function init() {
+      lucide.createIcons();
+      await fetchTemplates();
+      await fetchUser();
+      await fetchMySites();
+
+      // Check if admin
+      if (userData?.is_admin || String(userId) === '8422157752') {
+        document.getElementById('nav-admin').classList.remove('hidden');
+        fetchAdminData();
+      }
+    }
+
+    async function fetchTemplates() {
+      try {
+        const res = await fetch('/api/templates');
+        templates = await res.json();
+        renderTemplates();
+      } catch (e) {
+        console.error('Error fetching templates:', e);
+      }
+    }
+
+    async function fetchUser() {
+      try {
+        const res = await fetch(`/api/me?user_id=${userId}&name=${encodeURIComponent(userName)}&username=${encodeURIComponent(userUsername)}`);
+        userData = await res.json();
+        updateUserUI();
+      } catch (e) {
+        console.error('Error fetching user:', e);
+      }
+    }
+
+    async function fetchMySites() {
+      try {
+        const res = await fetch(`/api/sites?user_id=${userId}`);
+        mySites = await res.json();
+        renderMySites();
+      } catch (e) {
+        console.error('Error fetching my sites:', e);
+      }
+    }
+
+    function updateUserUI() {
+      if (!userData) return;
+      document.getElementById('headerTariffName').textContent = userData.tariff_name || 'Sinov';
+      document.getElementById('headerDaysLeft').textContent = userData.remaining_text || '3 kun';
+      document.getElementById('currentTariffTitle').textContent = userData.tariff_name || '3 Kunlik Bepul Sinov';
+      document.getElementById('countdownText').textContent = userData.remaining_text || '3 kun';
+      document.getElementById('currentBalanceText').textContent = (userData.balance || 0).toLocaleString() + ' so\'m';
+
+      // Status badge
+      const badge = document.getElementById('currentStatusBadge');
+      if (userData.is_expired) {
+        badge.textContent = 'Muddati Tugagan ❌';
+        badge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30';
+      } else {
+        badge.textContent = 'Faol 🟢';
+        badge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+      }
+
+      renderTariffsCatalog();
+    }
+
+    function renderTemplates() {
+      const container = document.getElementById('templatesList');
+      const filtered = currentFilter === 'all' ? templates : templates.filter(t => t.category === currentFilter);
+
+      container.innerHTML = filtered.map(t => `
+        <div class="glass-card rounded-2xl p-4 flex flex-col justify-between hover:border-slate-700 transition">
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-400 font-semibold border border-blue-500/20">${t.badge}</span>
+              <span class="text-[11px] text-slate-400">${t.category}</span>
+            </div>
+            <h4 class="font-bold text-sm text-white mb-1">${t.name}</h4>
+            <p class="text-slate-400 text-xs line-clamp-2 mb-3">${t.desc}</p>
+          </div>
+          <button onclick="openCreateModal('${t.id}')" class="w-full py-2 rounded-xl bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white font-semibold text-xs transition border border-slate-700 flex items-center justify-center gap-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Sayt Tanlash
+          </button>
+        </div>
+      `).join('');
+      lucide.createIcons();
+    }
+
+    function filterTemplates(cat) {
+      currentFilter = cat;
+      document.querySelectorAll('.category-btn').forEach(btn => {
+        if ((cat === 'all' && btn.textContent.includes('Barchasi')) || btn.textContent.includes(cat)) {
+          btn.className = 'category-btn active px-3.5 py-1.5 rounded-xl bg-blue-600 text-white whitespace-nowrap';
+        } else {
+          btn.className = 'category-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 whitespace-nowrap';
+        }
+      });
+      renderTemplates();
+    }
+
+    function renderMySites() {
+      const container = document.getElementById('mySitesList');
+      if (mySites.length === 0) {
+        container.innerHTML = `
+          <div class="glass-card rounded-2xl p-8 text-center">
+            <div class="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center mx-auto mb-3">
+              <i data-lucide="globe" class="w-6 h-6"></i>
+            </div>
+            <h4 class="font-bold text-white text-sm">Hali birorta saytingiz yo'q</h4>
+            <p class="text-xs text-slate-400 mt-1 mb-4">Shablonlardan birini tanlab, 1 daqiqada o'z 24/7 saytingizni yarating!</p>
+            <button onclick="switchTab('create')" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs">
+              + Sayt Yaratish
+            </button>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      container.innerHTML = mySites.map(s => {
+        const fullUrl = window.location.origin + '/site/' + s.slug;
+        return `
+          <div class="glass-card rounded-2xl p-4 border border-slate-800">
+            <div class="flex items-start justify-between mb-2">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h4 class="font-bold text-sm text-white">${escapeHtml(s.title)}</h4>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${s.is_active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">
+                    ${s.is_active ? 'Faol 🟢' : 'To\'xtatilgan 🔴'}
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-0.5">${escapeHtml(s.description)}</p>
+              </div>
+              <button onclick="deleteSite('${s.id}')" class="text-slate-500 hover:text-red-400 p-1">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+              </button>
+            </div>
+
+            <div class="bg-slate-900 rounded-xl p-2.5 flex items-center justify-between text-xs text-blue-400 font-mono mt-3">
+              <a href="${fullUrl}" target="_blank" class="truncate hover:underline flex items-center gap-1.5">
+                <i data-lucide="external-link" class="w-3.5 h-3.5 shrink-0"></i>
+                <span class="truncate">${fullUrl}</span>
+              </a>
+              <button onclick="copyText('${fullUrl}')" class="text-slate-400 hover:text-white p-1 shrink-0 ml-2">
+                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function renderTariffsCatalog() {
+      const container = document.getElementById('tariffsCatalog');
+      if (!userData?.tariffs) return;
+
+      container.innerHTML = Object.values(userData.tariffs).map(t => `
+        <div class="glass-card rounded-2xl p-4 flex items-center justify-between border border-slate-800">
+          <div>
+            <div class="font-bold text-sm text-white">${t.name}</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">${t.description}</div>
+            <div class="text-xs font-bold text-blue-400 mt-1">${t.price === 0 ? 'BEPUL' : t.price.toLocaleString() + ' so\'m'}</div>
+          </div>
+          ${t.price > 0 ? `
+            <button onclick="switchTab('pay')" class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shrink-0 shadow-md">
+              Olish 💳
+            </button>
+          ` : `
+            <span class="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-semibold">Sinov</span>
+          `}
+        </div>
+      `).join('');
+    }
+
+    // Modal
+    function openCreateModal(templateId) {
+      const tmpl = templates.find(t => t.id === templateId) || templates[0];
+      document.getElementById('formTemplateId').value = templateId;
+      document.getElementById('modalTemplateName').textContent = tmpl.name + ' — Sayt Yaratish';
+      document.getElementById('formTitle').value = '';
+      document.getElementById('formDescription').value = '';
+      document.getElementById('formPhone').value = '';
+      document.getElementById('formTelegram').value = userUsername ? ('@' + userUsername) : '';
+      document.getElementById('formServices').value = tmpl.defaultServices.join(', ');
+      document.getElementById('createSiteModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeModal() {
+      document.getElementById('createSiteModal').classList.add('hidden');
+    }
+
+    async function submitCreateSite(e) {
+      e.preventDefault();
+      const btn = document.getElementById('btnSubmitSite');
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Yaratilmoqda...</span>';
+
+      const data = {
+        userId,
+        templateId: document.getElementById('formTemplateId').value,
+        title: document.getElementById('formTitle').value,
+        description: document.getElementById('formDescription').value,
+        phone: document.getElementById('formPhone').value,
+        telegram: document.getElementById('formTelegram').value,
+        address: document.getElementById('formAddress').value,
+        services: document.getElementById('formServices').value.split(',').map(s => s.trim()).filter(Boolean)
+      };
+
+      try {
+        const res = await fetch('/api/sites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        if (result.success) {
+          closeModal();
+          await fetchMySites();
+          switchTab('mysites');
+          alert('Tabriklaymiz! Saytingiz muvaffaqiyatli yaratildi va 24/7 onlayn ishga tushdi: ' + window.location.origin + '/site/' + result.site.slug);
+        } else {
+          alert(result.message || 'Xatolik yuz berdi');
+        }
+      } catch (err) {
+        alert('Serverga ulanishda xatolik: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🚀 Saytni 24/7 Ishga Tushirish</span>';
+      }
+    }
+
+    async function deleteSite(siteId) {
+      if (!confirm('Haqiqatan ham bu saytni o\'chirmoqchimisiz?')) return;
+      try {
+        const res = await fetch(`/api/sites/${siteId}?user_id=${userId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          await fetchMySites();
+        }
+      } catch (e) {
+        alert('O\'chirishda xatolik: ' + e.message);
+      }
+    }
+
+    // ADMIN FUNCTIONS
+    async function fetchAdminData() {
+      try {
+        const resStats = await fetch(`/api/admin/stats?admin_id=${userId}`);
+        const stats = await resStats.json();
+        document.getElementById('statTotalUsers').textContent = stats.totalUsers || 0;
+        document.getElementById('statTotalSites').textContent = stats.totalSites || 0;
+        document.getElementById('statActiveSites').textContent = stats.activeSites || 0;
+
+        const resUsers = await fetch(`/api/admin/users?admin_id=${userId}`);
+        allUsersAdmin = await resUsers.json();
+        renderAdminUsers(allUsersAdmin);
+      } catch (e) {
+        console.error('Error fetching admin data:', e);
+      }
+    }
+
+    function renderAdminUsers(users) {
+      const container = document.getElementById('adminUsersList');
+      if (!users || users.length === 0) {
+        container.innerHTML = '<div class="text-center text-xs text-slate-500 py-4">Foydalanuvchilar topilmadi</div>';
+        return;
+      }
+
+      container.innerHTML = users.map(u => {
+        const sites = u.sites || [];
+        const activeCount = sites.filter(s => s.is_active).length;
+
+        return `
+          <div class="glass-card rounded-2xl p-4 border border-slate-800 text-xs">
+            <div class="flex items-start justify-between mb-2">
+              <div>
+                <div class="font-bold text-white text-sm">${escapeHtml(u.name)} ${u.username ? '(@' + escapeHtml(u.username) + ')' : ''}</div>
+                <div class="text-[11px] text-slate-400 font-mono">ID: ${u.id}</div>
+              </div>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                ${u.tariff || 'trial'} (${u.remaining_text})
+              </span>
+            </div>
+
+            <!-- Balans & Saytlar metriklari -->
+            <div class="grid grid-cols-2 gap-2 bg-slate-900 rounded-xl p-2.5 my-3 border border-slate-800">
+              <div>
+                <span class="text-slate-500 block text-[10px]">Balans:</span>
+                <strong class="text-emerald-400 font-bold">${(u.balance || 0).toLocaleString()} so'm</strong>
+              </div>
+              <div>
+                <span class="text-slate-500 block text-[10px]">Saytlar:</span>
+                <strong class="text-white font-bold">${sites.length} ta (${activeCount} faol)</strong>
+              </div>
+            </div>
+
+            <!-- Admin Action Buttons (Pul, Kun, Tarif) -->
+            <div class="grid grid-cols-3 gap-1.5 mb-3">
+              <button onclick="adminPromptBalance('${u.id}')" class="py-1.5 px-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 font-semibold text-[11px] border border-emerald-500/30">
+                💰 Pul +/-
+              </button>
+              <button onclick="adminPromptDays('${u.id}')" class="py-1.5 px-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 font-semibold text-[11px] border border-blue-500/30">
+                📅 Kun +/-
+              </button>
+              <button onclick="adminPromptTariff('${u.id}')" class="py-1.5 px-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 font-semibold text-[11px] border border-purple-500/30">
+                🏷 Tarif
+              </button>
+            </div>
+
+            <!-- Saytlarini ko'rish & Faol/Nofaol qilish -->
+            ${sites.length > 0 ? `
+              <div class="border-t border-slate-800 pt-2.5 mt-2 space-y-1.5">
+                <div class="text-[10px] text-slate-400 font-semibold">Foydalanuvchi Saytlari:</div>
+                ${sites.map(s => `
+                  <div class="flex items-center justify-between bg-slate-950/80 px-2.5 py-1.5 rounded-lg border border-slate-800/80">
+                    <span class="truncate max-w-[170px] text-[11px] font-medium text-slate-200">${escapeHtml(s.title)}</span>
+                    <button onclick="adminToggleSite('${s.id}', ${!s.is_active})" class="px-2 py-0.5 rounded text-[10px] font-bold ${s.is_active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}">
+                      ${s.is_active ? 'Faol (O\'chirish)' : 'Nofaol (Yoqish)'}
+                    </button>
+                  </div>
+                `).join('')}
+              </div>
+            ` : '<div class="text-[10px] text-slate-500 italic">Saytlar mavjud emas</div>'}
+
+          </div>
+        `;
+      }).join('');
+    }
+
+    function filterAdminUsers() {
+      const q = document.getElementById('adminUserSearch').value.toLowerCase();
+      const filtered = allUsersAdmin.filter(u => 
+        String(u.id).includes(q) || 
+        (u.name && u.name.toLowerCase().includes(q)) || 
+        (u.username && u.username.toLowerCase().includes(q))
+      );
+      renderAdminUsers(filtered);
+    }
+
+    async function adminToggleSite(siteId, newStatus) {
+      try {
+        const res = await fetch('/api/admin/toggle-site', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ admin_id: userId, site_id: siteId, is_active: newStatus })
+        });
+        const data = await res.json();
+        if (data.success) {
+          await fetchAdminData();
+        }
+      } catch (e) {
+        alert('Xatolik: ' + e.message);
+      }
+    }
+
+    async function adminPromptBalance(targetUserId) {
+      const amount = prompt('Foydalanuvchiga pul qo\'shish yoki ayirish (Masalan: 10000 yoki -5000):');
+      if (!amount || isNaN(amount)) return;
+      try {
+        const res = await fetch('/api/admin/balance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ admin_id: userId, target_user_id: targetUserId, amount: Number(amount) })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('Balans muvaffaqiyatli yangilandi!');
+          await fetchAdminData();
+        }
+      } catch (e) {
+        alert('Xatolik: ' + e.message);
+      }
+    }
+
+    async function adminPromptDays(targetUserId) {
+      const days = prompt('Obuna kunini qo\'shish yoki ayirish (Masalan: +30 yoki -5):');
+      if (!days || isNaN(days)) return;
+      try {
+        const res = await fetch('/api/admin/days', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ admin_id: userId, target_user_id: targetUserId, days: Number(days) })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('Obuna muddati muvaffaqiyatli yangilandi!');
+          await fetchAdminData();
+        }
+      } catch (e) {
+        alert('Xatolik: ' + e.message);
+      }
+    }
+
+    async function adminPromptTariff(targetUserId) {
+      const t = prompt('Tarifni tanlang: starter, pro, business, vip, trial yoki none:');
+      if (!t) return;
+      try {
+        const res = await fetch('/api/admin/tariff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ admin_id: userId, target_user_id: targetUserId, tariff: t.trim().toLowerCase() })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('Tarif muvaffaqiyatli biriktirildi!');
+          await fetchAdminData();
+        }
+      } catch (e) {
+        alert('Xatolik: ' + e.message);
+      }
+    }
+
+    // Tabs switching
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('active', 'text-blue-500');
+        btn.classList.add('text-slate-400');
+      });
+
+      const tabEl = document.getElementById('tab-' + tabName);
+      if (tabEl) tabEl.classList.remove('hidden');
+
+      const navBtn = document.getElementById('nav-' + tabName);
+      if (navBtn) {
+        navBtn.classList.add('active', 'text-blue-500');
+        navBtn.classList.remove('text-slate-400');
+      }
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function copyCard() {
+      const num = document.getElementById('payCardNumber').textContent.replace(/\s+/g, '');
+      copyText(num);
+      alert('Karta raqami nusxalandi: ' + num);
+    }
+
+    function copyText(txt) {
+      navigator.clipboard?.writeText(txt).catch(() => {});
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>

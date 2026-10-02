@@ -1,0 +1,242 @@
+const express = require('express');
+const path = require('path');
+const cors = require('cors');
+const https = require('https');
+const config = require('./config');
+const db = require('./data/db');
+const TEMPLATES = require('./templates/templatesData');
+const { renderSiteHtml } = require('./templates/renderer');
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve Web App SPA
+app.get(['/webapp', '/'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'webapp.html'));
+});
+
+// Render user's site 24/7 on /site/:slug
+app.get(['/site/:slug', '/s/:slug'], (req, res) => {
+  const { slug } = req.params;
+  const site = db.getSite(slug);
+
+  if (!site) {
+    return res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><title>Sayt topilmadi</title><script src="https://cdn.tailwindcss.com"></script></head>
+      <body class="bg-slate-950 text-white flex items-center justify-center min-h-screen p-4 text-center">
+        <div class="max-w-md bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-xl">
+          <div class="text-4xl mb-4">🔍</div>
+          <h1 class="text-xl font-bold mb-2">Sayt topilmadi</h1>
+          <p class="text-slate-400 text-xs mb-6">Ushbu havola bo'yicha veb-sayt mavjud emas yoki o'chirilgan bo'lishi mumkin.</p>
+          <a href="https://t.me/MakerrUzbBot" class="px-5 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-semibold">🤖 Maker Botga o'tish</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  // Increment view counter
+  db.incrementSiteViews(site.id);
+
+  // Check if owner's tariff has expired
+  const owner = db.getUser(site.userId);
+  if (owner && owner.expires_at && owner.expires_at < Date.now()) {
+    // If expired, render inactive
+    return res.send(renderSiteHtml({ ...site, is_active: false }));
+  }
+
+  const html = renderSiteHtml(site);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+// ===================== REST API =====================
+
+// 1. Templates
+app.get('/api/templates', (req, res) => {
+  res.json(TEMPLATES);
+});
+
+// 2. User info
+app.get('/api/me', (req, res) => {
+  const userId = req.query.user_id;
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+
+  const name = req.query.name || 'Foydalanuvchi';
+  const username = req.query.username || '';
+  const user = db.getOrCreateUser(userId, { name, username });
+
+  const remaining = db.getRemainingTime(userId);
+  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+
+  res.json({
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    balance: user.balance || 0,
+    tariff: user.tariff,
+    tariff_name: tariffObj.name,
+    expires_at: user.expires_at,
+    is_expired: remaining.isExpired,
+    remaining_text: remaining.text,
+    remaining_days: remaining.days,
+    is_admin: String(userId) === String(config.OWNER_ID),
+    tariffs: config.TARIFFS
+  });
+});
+
+// 3. User's sites
+app.get('/api/sites', (req, res) => {
+  const userId = req.query.user_id;
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+  const sites = db.getSitesByUser(userId);
+  res.json(sites);
+});
+
+// 4. Create site
+app.post('/api/sites', (req, res) => {
+  const { userId, templateId, title, description, phone, telegram, address, services } = req.body;
+  if (!userId || !title) {
+    return res.status(400).json({ success: false, message: 'Foydalanuvchi va sarlavha kiritilishi shart' });
+  }
+
+  const user = db.getUser(userId);
+  if (!user) {
+    return res.status(400).json({ success: false, message: 'Foydalanuvchi topilmadi' });
+  }
+
+  // Check remaining time
+  const remaining = db.getRemainingTime(userId);
+  if (remaining.isExpired && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Tarifingiz muddati tugagan! Iltimos, obunani uzaytiring yoki balansni to\'ldiring.'
+    });
+  }
+
+  // Check sites limit
+  const userSites = db.getSitesByUser(userId);
+  const tariff = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const maxAllowed = tariff.maxSites || 1;
+
+  if (userSites.length >= maxAllowed && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({
+      success: false,
+      message: `Sizning tarifingizda ko'pi bilan ${maxAllowed} ta sayt yaratish mumkin. Tarifni oshiring!`
+    });
+  }
+
+  const site = db.createSite({
+    userId,
+    templateId,
+    title,
+    description,
+    phone,
+    telegram,
+    address,
+    services
+  });
+
+  res.json({ success: true, site });
+});
+
+// 5. Delete site
+app.delete('/api/sites/:id', (req, res) => {
+  const siteId = req.params.id;
+  const userId = req.query.user_id;
+  const success = db.deleteSite(siteId, userId);
+  res.json({ success });
+});
+
+// ===================== ADMIN API =====================
+
+function isAdmin(adminId) {
+  return String(adminId) === String(config.OWNER_ID);
+}
+
+// Admin: System stats
+app.get('/api/admin/stats', (req, res) => {
+  if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+  const stats = db.getStats();
+  res.json(stats);
+});
+
+// Admin: All users with their sites
+app.get('/api/admin/users', (req, res) => {
+  if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const users = db.getAllUsers();
+  const result = users.map(u => {
+    const sites = db.getSitesByUser(u.id);
+    const remaining = db.getRemainingTime(u.id);
+    return {
+      ...u,
+      sites,
+      remaining_text: remaining.text,
+      is_expired: remaining.isExpired
+    };
+  });
+  res.json(result);
+});
+
+// Admin: Toggle site active status
+app.post('/api/admin/toggle-site', (req, res) => {
+  const { admin_id, site_id, is_active } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const site = db.toggleSiteStatus(site_id, is_active);
+  res.json({ success: !!site, site });
+});
+
+// Admin: Add or subtract balance
+app.post('/api/admin/balance', (req, res) => {
+  const { admin_id, target_user_id, amount } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const user = db.addBalance(target_user_id, amount);
+  res.json({ success: !!user, user });
+});
+
+// Admin: Add or subtract days
+app.post('/api/admin/days', (req, res) => {
+  const { admin_id, target_user_id, days } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const user = db.addDays(target_user_id, days);
+  res.json({ success: !!user, user });
+});
+
+// Admin: Change tariff
+app.post('/api/admin/tariff', (req, res) => {
+  const { admin_id, target_user_id, tariff, days } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const user = db.setTariff(target_user_id, tariff, days);
+  res.json({ success: !!user, user });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), time: new Date().toISOString() });
+});
+
+function startServer() {
+  const port = config.PORT;
+  app.listen(port, () => {
+    console.log(`🚀 HTTP Server ${port}-portda ishga tushdi! (Web App: /webapp)`);
+  });
+
+  // 24/7 Keep-alive self-pinging on Render
+  if (config.BASE_URL) {
+    setInterval(() => {
+      https.get(`${config.BASE_URL}/health`, () => {}).on('error', () => {});
+    }, 4 * 60 * 1000);
+  }
+}
+
+module.exports = { app, startServer };

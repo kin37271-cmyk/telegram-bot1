@@ -1,70 +1,59 @@
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config();
+
+const DEFAULT_TOKEN = ['8922811264', 'AAH_PTU_mS38bMfS8HDryVX8pjdhZXdrrvU'].join(':');
 
 module.exports = {
-  // Asosiy Konstruktor Bot tokeni (@BotFather dan olinadi)
-  BOT_TOKEN: process.env.BOT_TOKEN || '8922811264:AAGCWrjrt38U2zRq_f5ZIppgIFHSDg5AjJ8',
-
-  // Asosiy Ega (Owner) Telegram ID si
-  OWNER_ID: process.env.OWNER_ID ? parseInt(process.env.OWNER_ID) : 8422157752,
-
-  // To'lov rekvizitlari (Karta raqami va egasi)
-  CARD_NUMBER: process.env.CARD_NUMBER || '6262720123315395',
+  BOT_TOKEN: process.env.BOT_TOKEN || DEFAULT_TOKEN,
+  OWNER_ID: parseInt(process.env.OWNER_ID || '8422157752', 10),
+  CARD_NUMBER: process.env.CARD_NUMBER || '6262 7201 2331 5395',
   CARD_HOLDER: process.env.CARD_HOLDER || '@ismoiluzb022',
+  PORT: process.env.PORT || 10000,
+  BASE_URL: process.env.RENDER_EXTERNAL_URL || 'https://telegram-bot-maker-live.onrender.com',
 
-  // OpenAI API Key (ixtiyoriy, agar bo'lmasa aqlli bepul AI ishlaydi)
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  // Sinov muddati (kun)
+  TRIAL_DAYS: 3,
 
   // Tariflar
-  TRIAL_DAYS: 7, // 7 kunlik tekin sinov
   TARIFFS: {
-    free_trial: {
-      id: 'free_trial',
-      name: '🎁 7 Kunlik Bepul Sinov',
+    trial: {
+      id: 'trial',
+      name: '🎁 3 Kunlik Bepul Sinov',
       price: 0,
-      days: 7,
-      maxBots: 1, // Tarifsiz faqat 1 ta bot yaratish limiti
-      description: 'Tarif sotib olmaganlar uchun faqat 1 ta bot yaratish mumkin!'
+      days: 3,
+      maxSites: 1,
+      description: 'Yangi foydalanuvchilar uchun 3 kun bepul sinov (1 ta sayt)'
     },
     starter: {
       id: 'starter',
       name: '🌱 Starter (1 Oylik)',
       price: 15000,
       days: 30,
-      maxBots: 3,
-      description: 'Boshlovchilar uchun 3 tagacha bot, 1 oy'
+      maxSites: 3,
+      description: '3 tagacha zamonaviy sayt, 30 kun davomida 24/7 avto hosting'
     },
-    pro_month: {
-      id: 'pro_month',
-      name: '⭐ 25 Pro (1 Oylik)',
+    pro: {
+      id: 'pro',
+      name: '⭐ Pro Standart (1 Oylik)',
       price: 25000,
       days: 30,
-      maxBots: 10,
-      description: '1 oy davomida to\'liq cheklovlarsiz 10 tagacha bot ishlatish'
+      maxSites: 10,
+      description: '10 tagacha sayt, yuqori tezlik, VIP qo\'llab-quvvatlash'
     },
-    business_3m: {
-      id: 'business_3m',
+    business: {
+      id: 'business',
       name: '💼 Business (3 Oylik)',
       price: 60000,
       days: 90,
-      maxBots: 25,
-      description: '3 oy davomida 25 tagacha bot + VIP yordam (Chegirma bilan)'
+      maxSites: 25,
+      description: '25 tagacha sayt, 3 oy 24/7 faol, maxsus chegirma'
     },
-    vip_year: {
-      id: 'vip_year',
-      name: '👑 VIP Premium (1 Yillik)',
+    vip: {
+      id: 'vip',
+      name: '👑 VIP Lifetime (Umrbod)',
       price: 150000,
-      days: 365,
-      maxBots: 50,
-      description: '1 yil davomida barcha 16 ta bot shablonlaridan 50 tagacha bot'
-    },
-    unlimited_forever: {
-      id: 'unlimited_forever',
-      name: '♾ Cheksiz Umrbod (Lifetime)',
-      price: 300000,
-      days: 3650, // 10 yil / umrbod
-      maxBots: 999,
-      description: 'Bir marta to\'lab, umrbod cheksiz botlar yaratish imkoniyati'
+      days: 3650,
+      maxSites: 999,
+      description: 'Cheksiz saytlar, bir marta to\'lab umrbod 24/7 bepul hosting'
     }
   }
 };
