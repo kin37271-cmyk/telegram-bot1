@@ -1144,23 +1144,33 @@ bot.on('text', async (ctx) => {
     }
 
     const existing = db.getAllBots().find(b => b.token === text);
+    let targetBot;
     if (existing) {
-      userStates.delete(userId);
-      return ctx.reply(`⚠️ Ushbu bot allaqachon tizimda mavjud: @${existing.botUsername}`, getMainMenuKeyboard(userId));
+      existing.userId = userId;
+      existing.botType = state.botType;
+      existing.botUsername = verify.username;
+      existing.botName = verify.firstName;
+      existing.is_active = true;
+      const currentDb = db.loadDB();
+      if (currentDb.bots && currentDb.bots[existing.id]) {
+        currentDb.bots[existing.id] = { ...existing };
+        db.saveDB(currentDb);
+      }
+      targetBot = existing;
+    } else {
+      targetBot = db.createBot({
+        userId,
+        token: text,
+        botType: state.botType,
+        botUsername: verify.username,
+        botName: verify.firstName
+      });
     }
-
-    const newBot = db.createBot({
-      userId,
-      token: text,
-      botType: state.botType,
-      botUsername: verify.username,
-      botName: verify.firstName
-    });
 
     userStates.delete(userId);
 
     // Launch bot 24/7 immediately
-    await botManager.startBot(newBot);
+    await botManager.startBot(targetBot);
 
     try { ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
 

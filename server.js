@@ -227,22 +227,33 @@ app.post('/api/bots', async (req, res) => {
 
   // Check existing token
   const existing = db.getAllBots().find(b => b.token === cleanToken);
+  let targetBot;
   if (existing) {
-    return res.status(400).json({ success: false, message: 'Bu bot token allaqachon qo\'shilgan!' });
+    existing.userId = userId;
+    existing.botType = botType || 'weather';
+    existing.botUsername = verify.username;
+    existing.botName = verify.firstName;
+    existing.is_active = true;
+    const currentDb = db.loadDB();
+    if (currentDb.bots && currentDb.bots[existing.id]) {
+      currentDb.bots[existing.id] = { ...existing };
+      db.saveDB(currentDb);
+    }
+    targetBot = existing;
+  } else {
+    targetBot = db.createBot({
+      userId,
+      token: cleanToken,
+      botType: botType || 'weather',
+      botUsername: verify.username,
+      botName: verify.firstName
+    });
   }
 
-  const newBot = db.createBot({
-    userId,
-    token: cleanToken,
-    botType: botType || 'weather',
-    botUsername: verify.username,
-    botName: verify.firstName
-  });
-
   // Launch bot 24/7
-  await botManager.startBot(newBot);
+  await botManager.startBot(targetBot);
 
-  res.json({ success: true, bot: newBot });
+  res.json({ success: true, bot: targetBot });
 });
 
 // 8. Delete bot

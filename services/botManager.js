@@ -236,23 +236,39 @@ async function extractVideo(rawUrl) {
     }
   }
 
-  // 3. YouTube video resolver (btchDl)
-  if ((url.includes('youtu.be') || url.includes('youtube.com')) && btchDl?.youtube) {
+  // 3. YouTube video resolver (loader.to + btchDl fallback)
+  if (url.includes('youtu.be') || url.includes('youtube.com')) {
     try {
-      const ytData = await btchDl.youtube(url);
-      if (ytData && (ytData.mp4 || ytData.url)) {
+      const ytVideoUrl = await getVideoFromYouTubeUrl(url);
+      if (ytVideoUrl) {
         return {
           success: true,
           platform: 'YouTube',
-          videoUrl: ytData.mp4 || ytData.url,
-          hdUrl: ytData.mp4 || ytData.url,
-          title: ytData.title || 'YouTube Video',
-          author: ytData.author || '',
-          quality: '1080p HD'
+          videoUrl: ytVideoUrl,
+          hdUrl: ytVideoUrl,
+          title: 'YouTube Video',
+          quality: '720p HD'
         };
       }
-    } catch (e) {
-      console.error('btch youtube error:', e.message);
+    } catch (e) {}
+
+    if (btchDl?.youtube) {
+      try {
+        const ytData = await btchDl.youtube(url);
+        if (ytData && (ytData.mp4 || ytData.url)) {
+          return {
+            success: true,
+            platform: 'YouTube',
+            videoUrl: ytData.mp4 || ytData.url,
+            hdUrl: ytData.mp4 || ytData.url,
+            title: ytData.title || 'YouTube Video',
+            author: ytData.author || '',
+            quality: '1080p HD'
+          };
+        }
+      } catch (e) {
+        console.error('btch youtube error:', e.message);
+      }
     }
   }
 
@@ -287,26 +303,87 @@ async function extractVideo(rawUrl) {
   return { success: false, error: 'Video manbasi aniqlanmadi' };
 }
 
+// 🎬 YouTube MP4 video fetcher (loader.to)
+async function getVideoFromYouTubeUrl(ytUrl) {
+  try {
+    const initRes = await fetch(`https://loader.to/ajax/download.php?format=720&url=${encodeURIComponent(ytUrl)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!initRes.ok) return null;
+    const initData = await initRes.json();
+    if (!initData || !initData.id) return null;
+
+    const progressUrl = initData.progress_url || `https://loader.to/ajax/progress.php?id=${initData.id}`;
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1200));
+      const progRes = await fetch(progressUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(6000)
+      });
+      if (!progRes.ok) continue;
+      const progData = await progRes.json();
+      if (progData.download_url) {
+        return progData.download_url;
+      }
+    }
+  } catch (err) {
+    console.error('loader.to video error:', err.message);
+  }
+  return null;
+}
+
+// 🎵 YouTube MP3 audio fetcher (loader.to)
+async function getMp3FromYouTubeUrl(ytUrl) {
+  try {
+    const initRes = await fetch(`https://loader.to/ajax/download.php?format=mp3&url=${encodeURIComponent(ytUrl)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!initRes.ok) return null;
+    const initData = await initRes.json();
+    if (!initData || !initData.id) return null;
+
+    const progressUrl = initData.progress_url || `https://loader.to/ajax/progress.php?id=${initData.id}`;
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1200));
+      const progRes = await fetch(progressUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(6000)
+      });
+      if (!progRes.ok) continue;
+      const progData = await progRes.json();
+      if (progData.download_url) {
+        return progData.download_url;
+      }
+    }
+  } catch (err) {
+    console.error('loader.to mp3 error:', err.message);
+  }
+  return null;
+}
+
 // 🎵 Real MP3 Audio Fetcher (320kbps Studio Master)
 async function getAudioForQuery(query) {
   if (!btchDl) return null;
   try {
     const searchRes = await btchDl.yts(query);
-    const items = (searchRes?.result?.all || searchRes?.result || []).filter(x => x.type === 'video' || x.url);
-    for (let i = 0; i < Math.min(items.length, 5); i++) {
-      const video = items[i];
-      if (!video?.url) continue;
-      try {
-        const ytData = await btchDl.youtube(video.url);
-        if (ytData && (ytData.mp3 || ytData.audio)) {
-          return {
-            title: ytData.title || video.title || query,
-            performer: ytData.author || video.author?.name || 'Artist',
-            audioUrl: ytData.mp3 || ytData.audio,
-            thumbnail: ytData.thumbnail || video.thumbnail
-          };
-        }
-      } catch (err) {}
+    const all = searchRes?.result?.all || searchRes?.result || [];
+    const videos = all.filter(x => (x.type === 'video' || x.videoId) && (!x.url || !x.url.includes('playlist')));
+    if (!videos.length) return null;
+
+    for (let i = 0; i < Math.min(videos.length, 3); i++) {
+      const video = videos[i];
+      const ytUrl = video.url || `https://www.youtube.com/watch?v=${video.videoId}`;
+      const mp3Url = await getMp3FromYouTubeUrl(ytUrl);
+      if (mp3Url) {
+        return {
+          title: video.title || query,
+          performer: video.author?.name || 'Artist',
+          audioUrl: mp3Url,
+          thumbnail: video.thumbnail || video.image
+        };
+      }
     }
   } catch (e) {
     console.error('getAudioForQuery error:', e.message);
@@ -314,7 +391,7 @@ async function getAudioForQuery(query) {
   return null;
 }
 
-// 🎵 Xonandalar va Mashhur Qo'shiqlar Katalogi
+// 🎵 Xonandalar va Mashhur Qo'shiqlar Katalogi (To'liq O'zbek Yulduzlari)
 const MUSIC_ARTISTS = {
   'xojakbar': {
     name: "🌟 Xojakbar Ro'zmetov",
@@ -331,6 +408,49 @@ const MUSIC_ARTISTS = {
       { id: 8, title: "Ketma go'zal", year: '2023', duration: '03:52', size: '8.9 MB' },
       { id: 9, title: "Yurak yig'lar", year: '2024', duration: '04:22', size: '10.1 MB' },
       { id: 10, title: "Armon bo'ldi", year: '2023', duration: '03:40', size: '8.5 MB' }
+    ]
+  },
+  'munisa': {
+    name: "🎤 Munisa Rizayeva",
+    genre: "Zamonaviy estrada & Pop",
+    bio: "O'zbek estradasining yorqin yulduzi, millionlab muxlislar sevimli san'atkori.",
+    songs: [
+      { id: 1, title: 'Jonginam', year: '2024', duration: '03:40', size: '8.5 MB' },
+      { id: 2, title: "O'ylamading (feat. Konsta)", year: '2024', duration: '04:05', size: '9.4 MB' },
+      { id: 3, title: 'Yonar', year: '2023', duration: '03:50', size: '8.8 MB' },
+      { id: 4, title: 'Arzimaysan', year: '2023', duration: '03:35', size: '8.2 MB' },
+      { id: 5, title: 'Sensiz', year: '2024', duration: '04:15', size: '9.8 MB' },
+      { id: 6, title: 'Yetmadimi', year: '2023', duration: '03:48', size: '8.7 MB' },
+      { id: 7, title: 'Kuch ber', year: '2024', duration: '03:55', size: '9.0 MB' },
+      { id: 8, title: 'Xafa-xafa', year: '2023', duration: '03:30', size: '8.1 MB' }
+    ]
+  },
+  'gaybulla': {
+    name: "🎤 G'aybulla Tursunov",
+    genre: "Xalqona & Shirin navolar",
+    bio: "Haqiqiy xalqona va to'yona qo'shiqlar ustasi.",
+    songs: [
+      { id: 1, title: 'Maruskam', year: '2024', duration: '03:50', size: '8.8 MB' },
+      { id: 2, title: 'Quralay', year: '2024', duration: '04:10', size: '9.5 MB' },
+      { id: 3, title: 'Yulduzimsan', year: '2023', duration: '03:45', size: '8.6 MB' },
+      { id: 4, title: 'Dilorom', year: '2024', duration: '04:02', size: '9.2 MB' },
+      { id: 5, title: 'Jon bolam', year: '2023', duration: '04:20', size: '10.0 MB' },
+      { id: 6, title: 'Shoir yigit', year: '2024', duration: '03:35', size: '8.2 MB' }
+    ]
+  },
+  'yulduz': {
+    name: "🎤 Yulduz Usmonova",
+    genre: "O'zbek Primadonnasi",
+    bio: "O'zbekiston xalq artisti, afsonaviy qo'shiqchi.",
+    songs: [
+      { id: 1, title: 'Muhabbat', year: '2024', duration: '04:20', size: '10.0 MB' },
+      { id: 2, title: 'Xalqim', year: '2023', duration: '04:45', size: '11.0 MB' },
+      { id: 3, title: "Tut qo'limdan", year: '2024', duration: '03:58', size: '9.2 MB' },
+      { id: 4, title: 'Seni sevardim', year: '2023', duration: '04:30', size: '10.4 MB' },
+      { id: 5, title: 'Taralla-dalli', year: '2024', duration: '03:35', size: '8.3 MB' },
+      { id: 6, title: 'Ey aziz inson', year: '2023', duration: '04:15', size: '9.8 MB' },
+      { id: 7, title: 'Yulduzlar', year: '2024', duration: '04:10', size: '9.6 MB' },
+      { id: 8, title: 'Binafsha', year: '2023', duration: '03:50', size: '8.8 MB' }
     ]
   },
   'jaloliddin': {
@@ -385,19 +505,6 @@ const MUSIC_ARTISTS = {
       { id: 6, title: 'Simfoniya', year: '2024', duration: '03:45', size: '8.6 MB' }
     ]
   },
-  'yulduz': {
-    name: "🎤 Yulduz Usmonova",
-    genre: "O'zbek Primadonnasi",
-    bio: "O'zbekiston xalq artisti, afsonaviy qo'shiqchi.",
-    songs: [
-      { id: 1, title: 'Muhabbat', year: '2024', duration: '04:20', size: '10.0 MB' },
-      { id: 2, title: 'Xalqim', year: '2023', duration: '04:45', size: '11.0 MB' },
-      { id: 3, title: "Tut qo'limdan", year: '2024', duration: '03:58', size: '9.2 MB' },
-      { id: 4, title: 'Seni sevardim', year: '2023', duration: '04:30', size: '10.4 MB' },
-      { id: 5, title: 'Taralla-dalli', year: '2024', duration: '03:35', size: '8.3 MB' },
-      { id: 6, title: 'Ey aziz inson', year: '2023', duration: '04:15', size: '9.8 MB' }
-    ]
-  },
   'ozoda': {
     name: "🎤 Ozoda Nursaidova",
     genre: "Estrada & Retro",
@@ -418,6 +525,67 @@ const MUSIC_ARTISTS = {
       { id: 2, title: 'Bolaligim', year: '2023', duration: '04:00', size: '9.2 MB' },
       { id: 3, title: "Ko'zlaring", year: '2024', duration: '03:45', size: '8.6 MB' },
       { id: 4, title: 'Begona', year: '2023', duration: '03:55', size: '9.0 MB' }
+    ]
+  },
+  'tohir': {
+    name: "🎤 Tohir Sodiqov (Bolalar)",
+    genre: "Afsonaviy O'zbek Rok & Pop",
+    bio: "Bolalar guruhi asoschisi, o'zbek estradasining tirik afsonasi.",
+    songs: [
+      { id: 1, title: 'Kerak emas shahlo ko\'zlaring', year: '2023', duration: '04:15', size: '9.8 MB' },
+      { id: 2, title: 'Sevgi fasli', year: '2024', duration: '03:50', size: '8.8 MB' },
+      { id: 3, title: 'Yomg\'irlar', year: '2023', duration: '04:05', size: '9.4 MB' },
+      { id: 4, title: 'Eshiging ochmadi yor', year: '2024', duration: '03:40', size: '8.5 MB' }
+    ]
+  },
+  'shohrux': {
+    name: "🎤 Shohruxxon",
+    genre: "Romantik estrada",
+    bio: "Dilbar qo'shiqlar va sevimli taronalar muallifi.",
+    songs: [
+      { id: 1, title: 'Yig\'lama yurak', year: '2024', duration: '03:45', size: '8.6 MB' },
+      { id: 2, title: 'Zor-zor', year: '2023', duration: '04:00', size: '9.2 MB' },
+      { id: 3, title: 'Pari', year: '2024', duration: '03:35', size: '8.2 MB' }
+    ]
+  },
+  'rayhon': {
+    name: "🎤 Rayhon G'aniyeva",
+    genre: "Zamonaviy Pop Diva",
+    bio: "Betakror shou va kuylar yaratuvchisi.",
+    songs: [
+      { id: 1, title: 'Yuragimdasan', year: '2024', duration: '03:50', size: '8.8 MB' },
+      { id: 2, title: 'Ayt', year: '2023', duration: '04:10', size: '9.5 MB' },
+      { id: 3, title: 'Aldangan yurak', year: '2024', duration: '03:42', size: '8.5 MB' }
+    ]
+  },
+  'shahzoda': {
+    name: "🎤 Shahzoda",
+    genre: "Sharqona Pop",
+    bio: "O'zbek va xalqaro estrada yulduzi.",
+    songs: [
+      { id: 1, title: 'Chik-chik', year: '2024', duration: '03:30', size: '8.1 MB' },
+      { id: 2, title: 'Assalomu alaykum', year: '2023', duration: '03:55', size: '9.0 MB' },
+      { id: 3, title: 'Layli va Majnun', year: '2024', duration: '04:05', size: '9.4 MB' }
+    ]
+  },
+  'botir': {
+    name: "🎤 Botir Qodirov",
+    genre: "Mumtoz va Klassik estrada",
+    bio: "Dardli va kuchli ovoz sohibi.",
+    songs: [
+      { id: 1, title: 'Ona', year: '2024', duration: '04:30', size: '10.3 MB' },
+      { id: 2, title: 'Jim turing', year: '2023', duration: '04:15', size: '9.8 MB' },
+      { id: 3, title: 'Seni deb', year: '2024', duration: '03:50', size: '8.8 MB' }
+    ]
+  },
+  'sherali': {
+    name: "🎤 Sherali Jo'rayev",
+    genre: "O'zbek Milliy Klassikasi",
+    bio: "O'zbekiston xalq hofizi, afsonaviy san'atkor.",
+    songs: [
+      { id: 1, title: 'Karvon', year: '2023', duration: '05:20', size: '12.2 MB' },
+      { id: 2, title: 'O\'zbegim', year: '2023', duration: '06:10', size: '14.0 MB' },
+      { id: 3, title: 'Gulandon', year: '2024', duration: '04:45', size: '11.0 MB' }
     ]
   }
 };
@@ -1011,10 +1179,14 @@ function setupBotHandlers(clientBot, botRecord) {
     ]).resize();
 
     const artistsKeyboard = Markup.keyboard([
-      ['🌟 Xojakbar Ro\'zmetov', '🎤 Jaloliddin Ahmadaliyev'],
-      ['🎤 Xamdam Sobirov', '🎤 Janob Rasul'],
-      ['🎤 Konsta', '🎤 Yulduz Usmonova'],
+      ['🌟 Xojakbar Ro\'zmetov', '🎤 Munisa Rizayeva'],
+      ['🎤 G\'aybulla Tursunov', '🎤 Yulduz Usmonova'],
+      ['🎤 Jaloliddin Ahmadaliyev', '🎤 Xamdam Sobirov'],
+      ['🎤 Janob Rasul', '🎤 Konsta'],
       ['🎤 Ozoda Nursaidova', '🎤 Doston Ergashev'],
+      ['🎤 Tohir Sodiqov (Bolalar)', '🎤 Shohruxxon'],
+      ['🎤 Rayhon G\'aniyeva', '🎤 Shahzoda'],
+      ['🎤 Botir Qodirov', '🎤 Sherali Jo\'rayev'],
       ['🏠 Asosiy Menyu']
     ]).resize();
 
@@ -1048,7 +1220,8 @@ function setupBotHandlers(clientBot, botRecord) {
       await ctx.replyWithHTML(
         `🎵 <b>Professional Musiqa Qidiruvchi Botga xush kelibsiz!</b>\n\n` +
         `Bu yerda siz o'zbek va jahon estradasi yulduzlarining eng sara taronalarini tinglashingiz va yuklab olishingiz mumkin!\n\n` +
-        `🌟 <b>Xojakbar Ro'zmetov</b> va boshqa mashhur artistlar qo'shiqlarini tanlash uchun pastdagi tugmalardan foydalaning, yoki istalgan qo'shiq nomini yozing.`,
+        `🌟 <b>Munisa Rizayeva, G'aybulla Tursunov, Yulduz Usmonova, Xojakbar Ro'zmetov</b> va barcha mashhur artistlar qo'shiqlari mavjud.\n\n` +
+        `Pastdagi tugmalardan xonandani tanlang yoki istalgan qo'shiq nomini yozing!`,
         mainMusicKeyboard
       );
     });
@@ -1059,78 +1232,27 @@ function setupBotHandlers(clientBot, botRecord) {
 
     clientBot.hears(['🔙 Boshqa Xonandalar', '🔙 Xonandalar', '🎤 Xonandalar (Artistlar)'], async (ctx) => {
       await ctx.replyWithHTML(
-        `🎤 <b>Mashhur Xonandalar Ro'yxati:</b>\n\n` +
-        `O'zingiz yoqtirgan artistni tanlang va barcha taronalarini bir joyda tinglang:`,
+        `🎤 <b>Mashhur O'zbek Xonandalari:</b>\n\n` +
+        `O'zingiz yoqtirgan artistni tanlang va barcha mashhur taronalarini bir joyda tinglang:`,
         artistsKeyboard
       );
     });
 
-    // Dedicated Xojakbar Ro'zmetov handler
-    clientBot.hears(['🌟 Xojakbar Ro\'zmetov', 'Xojakbar Ro\'zmetov', 'Xojakbar'], async (ctx) => {
-      const art = MUSIC_ARTISTS['xojakbar'];
-      await ctx.replyWithHTML(
-        `🌟 <b>${art.name}</b> — Barcha mashhur taronalar to'plami:\n\n` +
-        `📌 <i>${art.bio}</i>\n` +
-        `💿 <b>Janr:</b> ${art.genre}\n\n` +
-        `Kerakli qo'shiqni tanlang (masalan: <b>1. Sev mani</b> yoki <b>2. Vafodorim</b>):`,
-        xojakbarKeyboard
-      );
-    });
+    // Dynamic handlers for all artists in MUSIC_ARTISTS
+    Object.entries(MUSIC_ARTISTS).forEach(([key, art]) => {
+      const cleanName = art.name.replace(/[^\w\s\u0400-\u04FF']/gi, '').trim();
+      const triggers = [art.name, cleanName];
+      if (key === 'munisa') triggers.push('Munisa Rizayeva', 'Munisa Usmonova', 'Munisa', 'munisa');
+      if (key === 'gaybulla') triggers.push('G\'aybulla Tursunov', 'Gaybulla Tursunov', 'Gaybulla', 'gaybulla', 'G‘aybulla Tursunov');
+      if (key === 'yulduz') triggers.push('Yulduz Usmonova', 'Yulduz', 'yulduz');
+      if (key === 'xojakbar') triggers.push('Xojakbar Ro\'zmetov', 'Xojakbar', 'xojakbar', 'Xojiakbar');
 
-    clientBot.hears(['🎤 Jaloliddin Ahmadaliyev', 'Jaloliddin Ahmadaliyev'], async (ctx) => {
-      const art = MUSIC_ARTISTS['jaloliddin'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('jaloliddin')
-      );
-    });
-
-    clientBot.hears(['🎤 Xamdam Sobirov', 'Xamdam Sobirov'], async (ctx) => {
-      const art = MUSIC_ARTISTS['xamdam'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Xit taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('xamdam')
-      );
-    });
-
-    clientBot.hears(['🎤 Janob Rasul', 'Janob Rasul'], async (ctx) => {
-      const art = MUSIC_ARTISTS['janob'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Sho'x taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('janob')
-      );
-    });
-
-    clientBot.hears(['🎤 Konsta', 'Konsta'], async (ctx) => {
-      const art = MUSIC_ARTISTS['konsta'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Falsafiy va ma'noli taronalar:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('konsta')
-      );
-    });
-
-    clientBot.hears(['🎤 Yulduz Usmonova', 'Yulduz Usmonova'], async (ctx) => {
-      const art = MUSIC_ARTISTS['yulduz'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Afsonaviy qo'shiqlar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('yulduz')
-      );
-    });
-
-    clientBot.hears(['🎤 Ozoda Nursaidova', 'Ozoda Nursaidova'], async (ctx) => {
-      const art = MUSIC_ARTISTS['ozoda'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Saralangan taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('ozoda')
-      );
-    });
-
-    clientBot.hears(['🎤 Doston Ergashev', 'Doston Ergashev'], async (ctx) => {
-      const art = MUSIC_ARTISTS['doston'];
-      await ctx.replyWithHTML(
-        `🎤 <b>${art.name}</b> — Ommabop taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n\nKerakli qo'shiqni tanlang:`,
-        getArtistKeyboard('doston')
-      );
+      clientBot.hears(triggers, async (ctx) => {
+        await ctx.replyWithHTML(
+          `🎤 <b>${art.name}</b> — Taronalar to'plami:\n\n📌 <i>${art.bio}</i>\n💿 <b>Janr:</b> ${art.genre}\n\nKerakli qo'shiqni tanlang:`,
+          getArtistKeyboard(key)
+        );
+      });
     });
 
     clientBot.hears('🔥 Top 10 Xitlar', async (ctx) => {
@@ -1275,12 +1397,15 @@ function setupBotHandlers(clientBot, botRecord) {
         }
       }
 
-      // If user typed artist name
-      if (qLower.includes('xojakbar') || qLower.includes('rozmetov')) {
-        return ctx.replyWithHTML(
-          `🌟 <b>Xojakbar Ro'zmetov</b> taronalari:\n\nKerakli qo'shiqni tanlang:`,
-          xojakbarKeyboard
-        );
+      // If user typed any artist name or part of it
+      for (const [key, artist] of Object.entries(MUSIC_ARTISTS)) {
+        const cleanName = artist.name.replace(/[^\w\s\u0400-\u04FF']/gi, '').toLowerCase();
+        if (qLower === key || qLower.includes(key) || cleanName.includes(qLower) || qLower.includes(cleanName)) {
+          return ctx.replyWithHTML(
+            `🎤 <b>${artist.name}</b> taronalari:\n\nKerakli qo'shiqni tanlang:`,
+            getArtistKeyboard(key)
+          );
+        }
       }
 
       // Live search and audio download for any user query (No YouTube links, direct MP3!)
