@@ -166,26 +166,7 @@ async function translateText(text) {
 
 // 🎬 Real Video Yuklovchi (Instagram, TikTok HD no-watermark, YouTube, Pinterest, Facebook)
 async function extractVideo(url) {
-  // 1. rahad-all-downloader-v2 (Instagram Reels, TikTok, YouTube, Threads, Pinterest)
-  if (alldl) {
-    try {
-      const res = await alldl(url);
-      if (res && res.data && res.data.videoUrl) {
-        return {
-          success: true,
-          platform: url.includes('instagram') ? 'Instagram' : url.includes('tiktok') ? 'TikTok' : url.includes('youtu') ? 'YouTube' : 'Media',
-          videoUrl: res.data.videoUrl,
-          hdUrl: res.data.videoUrl,
-          title: res.data.title || 'Video',
-          quality: '1080p Full HD (Tiniq va Suvsiz)'
-        };
-      }
-    } catch (e) {
-      console.error('alldl extraction error:', e.message);
-    }
-  }
-
-  // 2. TikTok tezkor maxsus resolver (tikwm.com)
+  // 1. TikTok tezkor maxsus resolver (tikwm.com - eng tezkor va 1080p suvsiz)
   if (url.includes('tiktok.com') || url.includes('douyin.com')) {
     try {
       const res = await fetch('https://www.tikwm.com/api/', {
@@ -212,7 +193,7 @@ async function extractVideo(url) {
     }
   }
 
-  // 3. YouTube video resolver (btchDl)
+  // 2. YouTube video resolver (btchDl)
   if ((url.includes('youtu.be') || url.includes('youtube.com')) && btchDl?.youtube) {
     try {
       const ytData = await btchDl.youtube(url);
@@ -229,6 +210,26 @@ async function extractVideo(url) {
       }
     } catch (e) {
       console.error('btch youtube error:', e.message);
+    }
+  }
+
+  // 3. rahad-all-downloader-v2 (Instagram Reels, TikTok, YouTube, Threads, Pinterest)
+  if (alldl) {
+    try {
+      const res = await alldl(url);
+      const vUrl = res?.data?.videoUrl || res?.result?.url || res?.url || res?.data?.url || (Array.isArray(res?.result) && res.result[0]?.url);
+      if (vUrl) {
+        return {
+          success: true,
+          platform: url.includes('instagram') ? 'Instagram' : url.includes('tiktok') ? 'TikTok' : url.includes('youtu') ? 'YouTube' : 'Media',
+          videoUrl: vUrl,
+          hdUrl: vUrl,
+          title: res?.data?.title || res?.result?.title || res?.title || 'Video',
+          quality: '1080p Full HD (Tiniq va Suvsiz)'
+        };
+      }
+    } catch (e) {
+      console.error('alldl extraction error:', e.message);
     }
   }
 
@@ -268,18 +269,21 @@ async function getAudioForQuery(query) {
   if (!btchDl) return null;
   try {
     const searchRes = await btchDl.yts(query);
-    const items = searchRes?.result?.all || searchRes?.result || [];
-    const video = items.find(x => x.type === 'video') || items[0];
-    if (video && video.url) {
-      const ytData = await btchDl.youtube(video.url);
-      if (ytData && (ytData.mp3 || ytData.audio)) {
-        return {
-          title: ytData.title || video.title || query,
-          performer: ytData.author || video.author?.name || 'Artist',
-          audioUrl: ytData.mp3 || ytData.audio,
-          thumbnail: ytData.thumbnail || video.thumbnail
-        };
-      }
+    const items = (searchRes?.result?.all || searchRes?.result || []).filter(x => x.type === 'video' || x.url);
+    for (let i = 0; i < Math.min(items.length, 5); i++) {
+      const video = items[i];
+      if (!video?.url) continue;
+      try {
+        const ytData = await btchDl.youtube(video.url);
+        if (ytData && (ytData.mp3 || ytData.audio)) {
+          return {
+            title: ytData.title || video.title || query,
+            performer: ytData.author || video.author?.name || 'Artist',
+            audioUrl: ytData.mp3 || ytData.audio,
+            thumbnail: ytData.thumbnail || video.thumbnail
+          };
+        }
+      } catch (err) {}
     }
   } catch (e) {
     console.error('getAudioForQuery error:', e.message);
