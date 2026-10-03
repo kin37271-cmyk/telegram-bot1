@@ -280,6 +280,38 @@
         </div>
       </div>
 
+      <!-- Broadcast / Rassilka to All Users Section -->
+      <div class="glass-card rounded-2xl p-4 mb-4 border border-blue-500/20 bg-gradient-to-br from-blue-950/20 to-slate-900/60 shadow-lg">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="p-1.5 rounded-lg bg-blue-500/20 text-blue-400">
+              <i data-lucide="megaphone" class="w-4 h-4"></i>
+            </span>
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider">📢 Hammaga Xabar Yuborish (Rassilka)</h3>
+          </div>
+          <span class="text-[10px] text-slate-400">Barcha mijozlarga</span>
+        </div>
+        <p class="text-[11px] text-slate-400 mb-3">Tizimdagi barcha foydalanuvchilarning Telegramiga bitta bosishda to'g'ridan-to'g'ri xabar tarqatish.</p>
+        
+        <div class="space-y-2.5">
+          <div>
+            <label class="block text-[11px] font-medium text-slate-300 mb-1">Xabar Matni (HTML teglari qo'llab-quvvatlanadi):</label>
+            <textarea id="broadcastMessage" rows="3" placeholder="Masalan: 🌟 Yangilik! Platformamizda yangi imkoniyatlar qo'shildi..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"></textarea>
+          </div>
+          <div>
+            <label class="block text-[11px] font-medium text-slate-300 mb-1">Rasm havolasi (Ixtiyoriy Photo URL):</label>
+            <input type="url" id="broadcastPhotoUrl" placeholder="https://misol.uz/rasm.jpg (bo'sh qoldirish mumkin)" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+          </div>
+          <div class="flex items-center justify-between pt-1">
+            <div id="broadcastStatus" class="text-[11px] text-slate-400 font-medium"></div>
+            <button type="button" onclick="sendAdminBroadcast()" id="btnSendBroadcast" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition flex items-center gap-1.5 shadow-lg shadow-blue-600/30">
+              <i data-lucide="send" class="w-3.5 h-3.5"></i>
+              <span>Yuborish</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Filter Buttons & Search -->
       <div class="space-y-2 mb-4">
         <div class="relative">
@@ -1208,6 +1240,60 @@
         }
       } catch (e) {
         alert('Xatolik: ' + e.message);
+      }
+    }
+
+    async function sendAdminBroadcast() {
+      const msgInput = document.getElementById('broadcastMessage');
+      const photoInput = document.getElementById('broadcastPhotoUrl');
+      const statusEl = document.getElementById('broadcastStatus');
+      const btn = document.getElementById('btnSendBroadcast');
+
+      const message = msgInput.value.trim();
+      const photo_url = photoInput.value.trim();
+
+      if (!message && !photo_url) {
+        alert('Iltimos, xabar matnini kiriting!');
+        return;
+      }
+
+      if (!confirm('Haqiqatdan ham ushbu xabarni BARCHA foydalanuvchilarga yubormoqchimisiz?')) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin">⏳</span> Yuborilmoqda...`;
+      statusEl.textContent = 'Xabar tarqatilmoqda, iltimos kuting...';
+      statusEl.className = 'text-[11px] text-amber-400 font-medium';
+
+      try {
+        const res = await fetch('/api/admin/broadcast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            admin_id: userId,
+            message,
+            photo_url: photo_url || undefined
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          statusEl.textContent = `✅ Yetkazildi: ${data.sent} ta, Yetkazilmadi: ${data.failed} ta (Jami: ${data.total})`;
+          statusEl.className = 'text-[11px] text-emerald-400 font-medium';
+          msgInput.value = '';
+          photoInput.value = '';
+          alert(`Xabar muvaffaqiyatli tarqatildi!\nYetkazildi: ${data.sent} ta\nYetkazilmadi: ${data.failed} ta`);
+        } else {
+          statusEl.textContent = '❌ Xatolik: ' + (data.message || 'Yuborib bo\'lmadi');
+          statusEl.className = 'text-[11px] text-red-400 font-medium';
+        }
+      } catch (err) {
+        statusEl.textContent = '❌ Tarmoq xatosi: ' + err.message;
+        statusEl.className = 'text-[11px] text-red-400 font-medium';
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="send" class="w-3.5 h-3.5"></i><span>Yuborish</span>`;
+        if (window.lucide) lucide.createIcons();
       }
     }
 

@@ -69,7 +69,8 @@ const profileKeyboard = Markup.keyboard([
 // 5. Admin Panel Tugmalari
 const adminMenuKeyboard = Markup.keyboard([
   ['📊 Statistika & Faollik', '👥 Foydalanuvchilar'],
-  ['🏆 Mijozlar Reytingi', '⬅️ Asosiy Menyu']
+  ['🏆 Mijozlar Reytingi', '📢 Hammaga Xabar Yuborish'],
+  ['⬅️ Asosiy Menyu']
 ]).resize();
 
 // Middleware (Profil rasmi va ma'lumotlarni saqlash)
@@ -753,6 +754,80 @@ bot.command('setphone', async (ctx) => {
   }
 });
 
+// ==================== HAMMAGA XABAR YUBORISH (RASSILKA) ====================
+bot.hears(['📢 Hammaga Xabar Yuborish', '📢 Rassilka'], async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return;
+  userStates.set(userId, { step: 'awaiting_broadcast' });
+
+  const stats = db.getStats();
+  const text = 
+`📢 <b>HAMMAGA XABAR YUBORISH (RASSILKA)</b>
+
+📊 Tizimdagi jami mijozlar soni: <b>${stats.totalUsers} ta</b>
+
+Barcha mijozlarga jo'natmoqchi bo'lgan xabaringizni yuboring:
+• ✍️ <b>Matn</b> (HTML teglari qo'llab-quvvatlanadi)
+• 🖼 <b>Rasm</b> (matn yoki izoh bilan birga)
+• 🎥 <b>Video</b> (matn yoki izoh bilan birga)
+• 🔁 <b>Forward</b> (istalgan kanal/chatdan post)
+
+<i>Bekor qilish uchun pastdagi "❌ Bekor qilish" tugmasini bosing.</i>`;
+
+  await ctx.replyWithHTML(text, cancelKeyboard);
+});
+
+bot.command(['broadcast', 'rassilka'], async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return;
+  userStates.set(userId, { step: 'awaiting_broadcast' });
+  const stats = db.getStats();
+  await ctx.replyWithHTML(
+    `📢 <b>HAMMAGA XABAR YUBORISH:</b>\n\nJami: <b>${stats.totalUsers} ta</b> foydalanuvchi.\nYubormoqchi bo'lgan xabaringizni yuboring:`,
+    cancelKeyboard
+  );
+});
+
+async function executeBroadcast(ctx) {
+  const allUsers = db.getAllUsersDetailed();
+  if (!allUsers || allUsers.length === 0) {
+    return ctx.reply('Tizimda hali foydalanuvchilar mavjud emas.', adminMenuKeyboard);
+  }
+
+  const waitMsg = await ctx.reply(
+    `⏳ Xabar tarqatish boshlandi... Jami: ${allUsers.length} ta foydalanuvchi.\nIltimos kuting...`
+  );
+
+  let sentCount = 0;
+  let failCount = 0;
+
+  for (const u of allUsers) {
+    try {
+      await ctx.copyMessage(u.id);
+      sentCount++;
+    } catch (err) {
+      failCount++;
+    }
+
+    if (allUsers.length > 25) {
+      await new Promise(r => setTimeout(r, 40));
+    }
+  }
+
+  try {
+    await ctx.deleteMessage(waitMsg.message_id);
+  } catch (e) {}
+
+  const resultMsg = 
+`✅ <b>XABAR TARQATISH YAKUNLANDI!</b>
+
+👥 <b>Jami mijozlar:</b> ${allUsers.length} ta
+📤 <b>Muvaffaqiyatli yetkazildi:</b> <b>${sentCount} ta</b>
+🚫 <b>Yetkazilmadi (bloklaganlar):</b> <b>${failCount} ta</b>`;
+
+  await ctx.replyWithHTML(resultMsg, adminMenuKeyboard);
+}
+
 // ==================== INCOMING TEXT (TOKEN INPUT) ====================
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
@@ -761,8 +836,19 @@ bot.on('text', async (ctx) => {
 
   if (!state) return;
 
+  // HAMMAGA XABAR YUBORISH (RASSILKA)
+  if (state.step === 'awaiting_broadcast' && isAdmin(userId)) {
+    userStates.delete(userId);
+    await executeBroadcast(ctx);
+    return;
+  }
+
   // BOT TOKEN KUTISH BOSQICHI
   if (state.step === 'awaiting_bot_token') {
+    // Bot tokeni chatda turib qolmasligi uchun foydalanuvchi yuborgan xabarni darhol o'chiramiz
+    try {
+      await ctx.deleteMessage(ctx.message.message_id);
+    } catch (e) {}
     const user = db.getUser(userId) || {};
     const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
     const userBots = db.getBotsByUser(userId);
@@ -838,9 +924,17 @@ Hoziroq @${verify.username} ga kirib <b>/start</b> bosib sinab ko'rishingiz mumk
   }
 });
 
-// ==================== CHEK QABUL QILISH (PHOTO) ====================
+// ==================== CHEK QABUL QILISH (PHOTO) VA RASSILKA ====================
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
+  const state = userStates.get(userId);
+
+  if (state && state.step === 'awaiting_broadcast' && isAdmin(userId)) {
+    userStates.delete(userId);
+    await executeBroadcast(ctx);
+    return;
+  }
+
   const name = ctx.from.first_name || 'Foydalanuvchi';
   const username = ctx.from.username ? `@${ctx.from.username}` : 'Mavjud emas';
   const photo = ctx.message.photo[ctx.message.photo.length - 1];
@@ -863,6 +957,18 @@ bot.on('photo', async (ctx) => {
     caption: adminMsg,
     parse_mode: 'HTML'
   }).catch(e => console.error('Admin xabarida xatolik:', e.message));
+});
+
+// ==================== VIDEO QABUL QILISH (RASSILKA) ====================
+bot.on('video', async (ctx) => {
+  const userId = ctx.from.id;
+  const state = userStates.get(userId);
+
+  if (state && state.step === 'awaiting_broadcast' && isAdmin(userId)) {
+    userStates.delete(userId);
+    await executeBroadcast(ctx);
+    return;
+  }
 });
 
 async function startBot() {

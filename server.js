@@ -363,6 +363,50 @@ app.post('/api/admin/tariff', (req, res) => {
   res.json({ success: !!user, user });
 });
 
+// Admin Broadcast (Xabar tarqatish - Barcha foydalanuvchilarga)
+app.post('/api/admin/broadcast', async (req, res) => {
+  const { admin_id, message, photo_url } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  if (!message && !photo_url) {
+    return res.status(400).json({ success: false, message: 'Xabar matni yoki rasm kiritilishi shart' });
+  }
+
+  const { bot } = require('./bot');
+  const allUsers = db.getAllUsersDetailed ? db.getAllUsersDetailed() : [];
+  let sent = 0;
+  let failed = 0;
+
+  for (const u of allUsers) {
+    try {
+      if (photo_url) {
+        await bot.telegram.sendPhoto(u.id, photo_url, {
+          caption: message || '',
+          parse_mode: 'HTML'
+        });
+      } else {
+        await bot.telegram.sendMessage(u.id, message, {
+          parse_mode: 'HTML'
+        });
+      }
+      sent++;
+    } catch (e) {
+      failed++;
+    }
+
+    if (allUsers.length > 25) {
+      await new Promise(r => setTimeout(r, 40));
+    }
+  }
+
+  res.json({
+    success: true,
+    total: allUsers.length,
+    sent,
+    failed
+  });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), time: new Date().toISOString() });

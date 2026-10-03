@@ -317,7 +317,9 @@ const dbManager = {
 
   getBotsByUser(userId) {
     const db = loadDB();
-    return Object.values(db.bots || {}).filter(b => String(b.userId) === String(userId));
+    return Object.values(db.bots || {})
+      .filter(b => String(b.userId) === String(userId))
+      .map(({ token, ...rest }) => rest);
   },
 
   getAllBots() {
@@ -412,7 +414,9 @@ const dbManager = {
     const users = Object.values(db.users);
 
     const detailed = users.map(u => {
-      const bots = Object.values(db.bots || {}).filter(b => String(b.userId) === String(u.id));
+      const bots = Object.values(db.bots || {})
+        .filter(b => String(b.userId) === String(u.id))
+        .map(({ token, ...rest }) => rest);
       const sites = Object.values(db.sites || {}).filter(s => String(s.userId) === String(u.id));
       const remaining = this.getRemainingTime(u.id);
       const metrics = this.calculateUserScore(u, bots, sites);
