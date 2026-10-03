@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const DEFAULT_TOKEN = ['8922811264', 'AAH_PTU_mS38bMfS8HDryVX8pjdhZXdrrvU'].join(':');
+const DEFAULT_TOKEN = ['8922811264', 'AAEgY18AMiM0dDK6KjAT-v48AYdDeni_dZQ'].join(':');
 
 module.exports = {
   BOT_TOKEN: process.env.BOT_TOKEN || DEFAULT_TOKEN,

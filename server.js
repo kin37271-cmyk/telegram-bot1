@@ -212,6 +212,9 @@ app.post('/api/bots', async (req, res) => {
   }
 
   const cleanToken = token.trim();
+  if (cleanToken === config.BOT_TOKEN || cleanToken.startsWith('8922811264:')) {
+    return res.status(400).json({ success: false, message: 'Asosiy Maker Bot tokenini kiritish taqiqlangan! O\'zingiz ochgan yangi bot tokenni kiriting.' });
+  }
   const verify = await botManager.verifyToken(cleanToken);
   if (!verify.valid) {
     return res.status(400).json({ success: false, message: 'BotFather tokeni noto\'g\'ri! Qayta tekshiring.' });

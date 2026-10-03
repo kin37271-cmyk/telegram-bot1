@@ -780,8 +780,15 @@ bot.on('text', async (ctx) => {
       return ctx.replyWithHTML(
         `❌ <b>Token formati noto'g'ri!</b>\n\n` +
         `Bot tokeni taxminan quyidagicha bo'ladi:\n` +
-        `<code>8922811264:AAH_PTU_mS38bMfS8HDryVX8pjdhZXdrrvU</code>\n\n` +
-        `Iltimos, @BotFather dan olgan tokenni to'liq yuboring:`,
+        `<code>1234567890:AAH_xxxx_ExampleToken_xxxx</code>\n\n` +
+        `Iltimos, @BotFather dan olgan yangi botingiz tokenni to'liq yuboring:`,
+        cancelKeyboard
+      );
+    }
+
+    if (text.trim() === config.BOT_TOKEN || text.trim().startsWith('8922811264:')) {
+      return ctx.replyWithHTML(
+        `❌ <b>Bu asosiy Maker Botning o'zining tokeni!</b>\nUni bola bot sifatida ulab bo'lmaydi.\n\nIltimos, o'zingiz @BotFather dan ochgan yangi botingiz tokenni yuboring:`,
         cancelKeyboard
       );
     }

@@ -50,7 +50,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 module.exports = {
   // Asosiy Konstruktor Bot tokeni (@BotFather dan olinadi)
-  BOT_TOKEN: process.env.BOT_TOKEN || '8922811264:AAH_PTU_mS38bMfS8HDryVX8pjdhZXdrrvU',
+  BOT_TOKEN: process.env.BOT_TOKEN || '8922811264:AAEgY18AMiM0dDK6KjAT-v48AYdDeni_dZQ',
 
   // Asosiy Ega (Owner) Telegram ID si
   OWNER_ID: process.env.OWNER_ID ? parseInt(process.env.OWNER_ID) : 8422157752,
