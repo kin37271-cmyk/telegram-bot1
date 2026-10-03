@@ -165,7 +165,19 @@ async function translateText(text) {
 }
 
 // 🎬 Real Video Yuklovchi (Instagram, TikTok HD no-watermark, YouTube, Pinterest, Facebook)
-async function extractVideo(url) {
+async function extractVideo(rawUrl) {
+  let url = rawUrl.trim();
+
+  // 0. Qisqa havolalarni (vt.tiktok.com, vm.tiktok.com, pin.it, youtu.be) to'liq manzilga aylantirish
+  if (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com') || url.includes('pin.it')) {
+    try {
+      const head = await fetch(url, { method: 'GET', redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
+      if (head.url && head.url.startsWith('http')) {
+        url = head.url;
+      }
+    } catch (e) {}
+  }
+
   // 1. TikTok tezkor maxsus resolver (tikwm.com - eng tezkor va 1080p suvsiz)
   if (url.includes('tiktok.com') || url.includes('douyin.com')) {
     try {
@@ -176,24 +188,55 @@ async function extractVideo(url) {
       });
       const data = await res.json();
       if (data && data.code === 0 && data.data) {
-        return {
-          success: true,
-          platform: 'TikTok',
-          videoUrl: data.data.play || data.data.hdplay,
-          hdUrl: data.data.hdplay || data.data.play,
-          musicUrl: data.data.music,
-          title: data.data.title || 'TikTok Video',
-          author: data.data.author?.nickname || data.data.author?.unique_id || 'TikTok User',
-          duration: data.data.duration || 0,
-          quality: '1080p Full HD (Suv belgisiz)'
-        };
+        const vUrl = data.data.play || data.data.hdplay;
+        if (vUrl) {
+          return {
+            success: true,
+            platform: 'TikTok',
+            videoUrl: vUrl,
+            hdUrl: data.data.hdplay || vUrl,
+            musicUrl: data.data.music,
+            title: data.data.title || 'TikTok Video',
+            author: data.data.author?.nickname || data.data.author?.unique_id || 'TikTok User',
+            duration: data.data.duration || 0,
+            quality: '1080p Full HD (Suv belgisiz)'
+          };
+        }
       }
     } catch (e) {
       console.error('Tikwm error:', e.message);
     }
   }
 
-  // 2. YouTube video resolver (btchDl)
+  // 2. Instagram Reels & Post (rahad-all-downloader-v2)
+  if (url.includes('instagram.com') || url.includes('instagr.am')) {
+    if (alldl) {
+      try {
+        const cleanUrl = url.split('?')[0];
+        let res;
+        try {
+          res = await alldl(cleanUrl);
+        } catch (e) {
+          res = await alldl(url);
+        }
+        const vUrl = res?.data?.videoUrl || res?.result?.url || res?.url || res?.data?.url || (Array.isArray(res?.result) && res.result[0]?.url);
+        if (vUrl) {
+          return {
+            success: true,
+            platform: 'Instagram',
+            videoUrl: vUrl,
+            hdUrl: vUrl,
+            title: res?.data?.title || 'Instagram Reel',
+            quality: '1080p Full HD (Tiniq va Suvsiz)'
+          };
+        }
+      } catch (e) {
+        console.error('alldl Instagram error:', e.message);
+      }
+    }
+  }
+
+  // 3. YouTube video resolver (btchDl)
   if ((url.includes('youtu.be') || url.includes('youtube.com')) && btchDl?.youtube) {
     try {
       const ytData = await btchDl.youtube(url);
@@ -213,32 +256,12 @@ async function extractVideo(url) {
     }
   }
 
-  // 3. rahad-all-downloader-v2 (Instagram Reels, TikTok, YouTube, Threads, Pinterest)
-  if (alldl) {
-    try {
-      const res = await alldl(url);
-      const vUrl = res?.data?.videoUrl || res?.result?.url || res?.url || res?.data?.url || (Array.isArray(res?.result) && res.result[0]?.url);
-      if (vUrl) {
-        return {
-          success: true,
-          platform: url.includes('instagram') ? 'Instagram' : url.includes('tiktok') ? 'TikTok' : url.includes('youtu') ? 'YouTube' : 'Media',
-          videoUrl: vUrl,
-          hdUrl: vUrl,
-          title: res?.data?.title || res?.result?.title || res?.title || 'Video',
-          quality: '1080p Full HD (Tiniq va Suvsiz)'
-        };
-      }
-    } catch (e) {
-      console.error('alldl extraction error:', e.message);
-    }
-  }
-
   // 4. VKr / Universal Video Web Resolver fallback
   try {
     const vkrEndpoint = 'https://vkrdownloader.org/download.php?vkr=' + encodeURIComponent(url);
     const res = await fetch(vkrEndpoint, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(6000)
+      signal: AbortSignal.timeout(8000)
     });
     if (res.ok) {
       const html = await res.text();
@@ -251,7 +274,7 @@ async function extractVideo(url) {
         const decodedUrl = decodeURIComponent(forceMatch[1]);
         return {
           success: true,
-          platform: url.includes('instagram') ? 'Instagram' : url.includes('youtu') ? 'YouTube' : 'Media',
+          platform: url.includes('instagram') ? 'Instagram' : 'Media',
           videoUrl: decodedUrl,
           hdUrl: decodedUrl,
           title,
@@ -872,10 +895,25 @@ function setupBotHandlers(clientBot, botRecord) {
     });
 
     clientBot.on('text', async (ctx) => {
-      const url = ctx.message.text.trim();
+      const text = ctx.message.text.trim();
+      const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+
+      if (!urlMatch) {
+        return ctx.replyWithHTML(
+          `⚠️ <b>Iltimos, video havolasini (linkini) yuboring!</b>\n\n` +
+          `Qo'llab-quvvatlanadi:\n` +
+          `• 🎵 TikTok: <code>https://vt.tiktok.com/...</code>\n` +
+          `• 📱 Instagram: <code>https://www.instagram.com/reel/...</code>\n` +
+          `• 🔴 YouTube: <code>https://youtube.com/shorts/...</code>\n` +
+          `• 📌 Pinterest: <code>https://pin.it/...</code>`
+        );
+      }
+
+      const url = urlMatch[0];
       const isMediaUrl = url.includes('tiktok.com') ||
                          url.includes('douyin.com') ||
                          url.includes('instagram.com') ||
+                         url.includes('instagr.am') ||
                          url.includes('youtu') ||
                          url.includes('pin.it') ||
                          url.includes('pinterest.com') ||
@@ -884,12 +922,8 @@ function setupBotHandlers(clientBot, botRecord) {
 
       if (!isMediaUrl) {
         return ctx.replyWithHTML(
-          `⚠️ <b>Iltimos, haqiqiy media havolasini yuboring!</b>\n\n` +
-          `Qo'llab-quvvatlanadi:\n` +
-          `• 🎵 TikTok: <code>https://vt.tiktok.com/...</code>\n` +
-          `• 📱 Instagram: <code>https://www.instagram.com/reel/...</code>\n` +
-          `• 🔴 YouTube: <code>https://youtube.com/shorts/...</code>\n` +
-          `• 📌 Pinterest: <code>https://pin.it/...</code>`
+          `⚠️ <b>Iltimos, qo'llab-quvvatlanadigan media havolasini yuboring!</b>\n\n` +
+          `Qo'llab-quvvatlanadi: TikTok, Instagram, YouTube, Pinterest.`
         );
       }
 
