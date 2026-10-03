@@ -1235,22 +1235,7 @@ async function startBot() {
     await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch(() => {});
 
     // Ensure clean bot profile info & official name MAKER BOT
-    const cleanDescription = `🤖 MAKER BOT — Telegram Botlar Konstruktori!
-
-Bu bot orqali siz o'zingizning shaxsiy Telegram botingizni 1 daqiqada bepul va oson yaratishingiz mumkin.
-
-🚀 16 xil turdagi professional botlar:
-• 🌦 Ob-havo & 🕌 Namoz Vaqtlari
-• 💵 Valyuta & 📱 QR Kod
-• 🤖 ChatGPT / AI & 🔤 Tarjimon
-• 🎬 Kino & 📢 Avto-Post
-• 📥 Video Yuklovchi (Instagram, TikTok, YouTube)
-• 🎵 Musiqa Qidiruvchi (320kbps MP3)
-• 🔮 Munajjimlar & 🧠 Viktorina
-• 📝 Bloknot & 🧮 Kalkulyator
-• 📨 Taklif & Murojaat
-
-Quyidagi "Start" tugmasini bosing va o'z botingizni yarating! 👇`;
+    const cleanDescription = `🌟 Assalomu alaykum! MAKER BOT platformasiga xush kelibsiz.\n\n🤖 16 xil Telegram bot konstruktori:\n• Ob-havo, Namoz vaqtlari, Valyuta, QR kod\n• ChatGPT / AI, Tarjimon, Kino, Kanal post\n• Anonim chat, Video yuklovchi, Musiqa\n• Munajjimlar, Viktorina, Bloknot, Kalkulyator\n\n⚡️ 24/7 uzluksiz avtomatik hosting!\nBoshlash uchun pastdagi Start tugmasini bosing! 👇`;
 
     const cleanBio = `🤖 MAKER BOT — Kod yozmasdan Telegram bot yaratish platformasi. O'z botingizni 1 daqiqada ishga tushiring!`;
 
