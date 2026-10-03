@@ -1234,11 +1234,46 @@ async function startBot() {
     await bot.telegram.deleteWebhook().catch(() => {});
     await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch(() => {});
 
+    // Ensure clean bot profile info & official name MAKER BOT
+    const cleanDescription = `🤖 MAKER BOT — Telegram Botlar Konstruktori!
+
+Bu bot orqali siz o'zingizning shaxsiy Telegram botingizni 1 daqiqada bepul va oson yaratishingiz mumkin.
+
+🚀 16 xil turdagi professional botlar:
+• 🌦 Ob-havo & 🕌 Namoz Vaqtlari
+• 💵 Valyuta & 📱 QR Kod
+• 🤖 ChatGPT / AI & 🔤 Tarjimon
+• 🎬 Kino & 📢 Avto-Post
+• 📥 Video Yuklovchi (Instagram, TikTok, YouTube)
+• 🎵 Musiqa Qidiruvchi (320kbps MP3)
+• 🔮 Munajjimlar & 🧠 Viktorina
+• 📝 Bloknot & 🧮 Kalkulyator
+• 📨 Taklif & Murojaat
+
+Quyidagi "Start" tugmasini bosing va o'z botingizni yarating! 👇`;
+
+    const cleanBio = `🤖 MAKER BOT — Kod yozmasdan Telegram bot yaratish platformasi. O'z botingizni 1 daqiqada ishga tushiring!`;
+
+    await bot.telegram.setMyName('MAKER BOT').catch(() => {});
+    await bot.telegram.setMyName('MAKER BOT', 'uz').catch(() => {});
+    await bot.telegram.setMyName('MAKER BOT', 'ru').catch(() => {});
+    await bot.telegram.setMyName('MAKER BOT', 'en').catch(() => {});
+
+    await bot.telegram.setMyDescription(cleanDescription).catch(() => {});
+    await bot.telegram.setMyDescription(cleanDescription, 'uz').catch(() => {});
+    await bot.telegram.setMyDescription(cleanDescription, 'ru').catch(() => {});
+    await bot.telegram.setMyDescription(cleanDescription, 'en').catch(() => {});
+
+    await bot.telegram.setMyShortDescription(cleanBio).catch(() => {});
+    await bot.telegram.setMyShortDescription(cleanBio, 'uz').catch(() => {});
+    await bot.telegram.setMyShortDescription(cleanBio, 'ru').catch(() => {});
+    await bot.telegram.setMyShortDescription(cleanBio, 'en').catch(() => {});
+
     bot.launch({ dropPendingUpdates: true }).catch(err => {
       console.error('Bot launch xatolik:', err.message);
     });
 
-    console.log('✅ Asosiy Konstruktor Boti pastki Reply Keyboard tugmalari bilan to\'liq ishga tushdi!');
+    console.log('✅ Asosiy Konstruktor Boti (MAKER BOT) pastki Reply Keyboard tugmalari bilan to\'liq ishga tushdi!');
   } catch (err) {
     console.error('Bot ishga tushirishda xatolik:', err.message);
   }
