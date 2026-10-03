@@ -312,6 +312,24 @@
         </div>
       </div>
 
+      <!-- Tariff & VIP Management (Yagona Baza & Live Sync) -->
+      <div class="glass-card rounded-2xl p-4 mb-4 border border-purple-500/20 bg-gradient-to-br from-purple-950/20 to-slate-900/60 shadow-lg">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="p-1.5 rounded-lg bg-purple-500/20 text-purple-400">
+              <i data-lucide="tag" class="w-4 h-4"></i>
+            </span>
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider">💎 Tariflar & VIP Boshqaruvi (Yagona Baza)</h3>
+          </div>
+          <span class="text-[10px] text-purple-300 font-semibold bg-purple-500/20 px-2 py-0.5 rounded-md">Bot & WebApp Sinxron</span>
+        </div>
+        <p class="text-[11px] text-slate-400 mb-3">Har bir tarifning narxini va beriladigan kunlar sonini (masalan: 5 kun, 10 kun, 30 kun) sozlang. Saqlangan zahoti Telegram Botda ham darhol o'zgaradi!</p>
+        
+        <div id="adminTariffsList" class="space-y-3">
+          <div class="text-center text-xs text-slate-500 py-3">Tariflar yuklanmoqda...</div>
+        </div>
+      </div>
+
       <!-- Filter Buttons & Search -->
       <div class="space-y-2 mb-4">
         <div class="relative">
@@ -984,6 +1002,8 @@
     }
 
     // 9. Admin Functions
+    let adminTariffs = {};
+
     async function fetchAdminData() {
       try {
         const resStats = await fetch(`/api/admin/stats?admin_id=${userId}`);
@@ -997,8 +1017,94 @@
         const resUsers = await fetch(`/api/admin/users?admin_id=${userId}`);
         allUsersAdmin = await resUsers.json();
         renderAdminUsers(allUsersAdmin);
+
+        await fetchAdminTariffs();
       } catch (e) {
         console.error('Error fetching admin data:', e);
+      }
+    }
+
+    async function fetchAdminTariffs() {
+      try {
+        const res = await fetch(`/api/admin/tariffs?admin_id=${userId}`);
+        const data = await res.json();
+        if (data.success && data.tariffs) {
+          adminTariffs = data.tariffs;
+          renderAdminTariffs(adminTariffs);
+        }
+      } catch (e) {
+        console.error('Error fetching admin tariffs:', e);
+      }
+    }
+
+    function renderAdminTariffs(tariffs) {
+      const container = document.getElementById('adminTariffsList');
+      if (!container || !tariffs) return;
+
+      container.innerHTML = Object.values(tariffs).map(t => `
+        <div class="bg-slate-950/80 rounded-xl p-3 border border-slate-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-xs text-white">${t.name} (<code>${t.id}</code>)</span>
+            <span class="text-[10px] text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded">${t.days} kunlik obuna</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-[11px]">
+            <div>
+              <label class="block text-[10px] text-slate-400 mb-0.5">Narxi (so'm):</label>
+              <input type="number" id="input_price_${t.id}" value="${t.price}" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-emerald-400 font-bold focus:outline-none focus:border-purple-500 text-xs">
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-400 mb-0.5">Kunlar soni:</label>
+              <input type="number" id="input_days_${t.id}" value="${t.days}" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-white font-bold focus:outline-none focus:border-purple-500 text-xs">
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-400 mb-0.5">Botlar limiti:</label>
+              <input type="number" id="input_bots_${t.id}" value="${t.maxBots}" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-blue-400 font-bold focus:outline-none focus:border-purple-500 text-xs">
+            </div>
+          </div>
+          <div class="flex items-center justify-between pt-1">
+            <span class="text-[10px] text-slate-500 truncate max-w-[220px]">${t.description}</span>
+            <button onclick="saveAdminTariff('${t.id}')" class="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1 shadow-md">
+              <i data-lucide="save" class="w-3 h-3"></i> Saqlash
+            </button>
+          </div>
+        </div>
+      `).join('');
+      if (window.lucide) lucide.createIcons();
+    }
+
+    async function saveAdminTariff(tariffId) {
+      const price = Number(document.getElementById(`input_price_${tariffId}`).value);
+      const days = Number(document.getElementById(`input_days_${tariffId}`).value);
+      const maxBots = Number(document.getElementById(`input_bots_${tariffId}`).value);
+
+      if (isNaN(price) || isNaN(days) || isNaN(maxBots)) {
+        alert('Iltimos to\'g\'ri raqamlarni kiriting!');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/admin/tariffs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            admin_id: userId,
+            tariff_id: tariffId,
+            price,
+            days,
+            maxBots,
+            maxSites: maxBots
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert(`✅ "${tariffId}" tarifi saqlandi!\nNarxi: ${price.toLocaleString()} so'm\nMuddati: ${days} kun\n\nBu o'zgarish Telegram Botda ham bir zumda yangilandi!`);
+          await fetchAdminTariffs();
+          await fetchUserData();
+        } else {
+          alert('Xatolik: ' + (data.error || 'Saqlab bo\'lmadi'));
+        }
+      } catch (e) {
+        alert('Serverga ulanishda xatolik: ' + e.message);
       }
     }
 
@@ -1306,12 +1412,15 @@
           <div>
             <div class="flex items-center gap-2">
               <span class="font-bold text-sm text-white">${t.name}</span>
+              <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/20 text-purple-400">
+                ⏳ ${t.days || 30} kun
+              </span>
               <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-500/20 text-blue-400">
                 🤖 ${t.maxBots >= 999 ? 'Cheksiz' : t.maxBots + ' ta bot'}
               </span>
             </div>
             <div class="text-[11px] text-slate-400 mt-1">${t.description}</div>
-            <div class="text-xs font-bold text-emerald-400 mt-1.5">${t.price === 0 ? 'BEPUL' : t.price.toLocaleString() + ' so\'m'}</div>
+            <div class="text-xs font-bold text-emerald-400 mt-1.5">${t.price === 0 ? 'BEPUL' : t.price.toLocaleString() + ' so\'m'} • <b>${t.days || 30} kunlik obuna</b></div>
           </div>
           ${t.price > 0 ? `
             <a href="https://t.me/MakerrUzbBot" target="_blank" class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shrink-0 shadow-md">

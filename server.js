@@ -75,7 +75,7 @@ app.get('/api/me', (req, res) => {
   const user = db.getOrCreateUser(userId, { name, username, photo_url: photoUrl });
 
   const remaining = db.getRemainingTime(userId);
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const detailedUsers = db.getAllUsersDetailed();
   const detailed = detailedUsers.find(u => String(u.id) === String(userId)) || {};
 
@@ -97,8 +97,13 @@ app.get('/api/me', (req, res) => {
     activity_level: detailed.activity_level || 'new',
     activity_label: detailed.activity_label || '🌱 Yangi Mijoz',
     rank: detailed.rank || detailedUsers.length,
-    tariffs: config.TARIFFS
+    tariffs: db.getTariffs()
   });
+});
+
+// 2.0 Get public tariffs list
+app.get('/api/tariffs', (req, res) => {
+  res.json({ success: true, tariffs: db.getTariffs() });
 });
 
 // 2.1 Update user phone
@@ -140,7 +145,7 @@ app.post('/api/sites', (req, res) => {
   }
 
   const userSites = db.getSitesByUser(userId);
-  const tariff = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariff = db.getTariff(user.tariff);
   const maxAllowed = tariff.maxSites || 1;
 
   if (userSites.length >= maxAllowed && String(userId) !== String(config.OWNER_ID)) {
@@ -201,7 +206,7 @@ app.post('/api/bots', async (req, res) => {
   }
 
   const userBots = db.getBotsByUser(userId);
-  const tariff = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariff = db.getTariff(user.tariff);
   const maxAllowed = tariff.maxBots || 1;
 
   if (userBots.length >= maxAllowed && String(userId) !== String(config.OWNER_ID)) {
@@ -354,13 +359,36 @@ app.post('/api/admin/days', (req, res) => {
   res.json({ success: !!user, user });
 });
 
-// Admin tariff
+// Admin set user tariff
 app.post('/api/admin/tariff', (req, res) => {
   const { admin_id, target_user_id, tariff, days } = req.body;
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
 
   const user = db.setTariff(target_user_id, tariff, days);
   res.json({ success: !!user, user });
+});
+
+// Admin get all tariffs
+app.get('/api/admin/tariffs', (req, res) => {
+  if (!isAdmin(req.query.admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+  res.json({ success: true, tariffs: db.getTariffs() });
+});
+
+// Admin update tariff details (narx, kun, nom, tavsif)
+app.post('/api/admin/tariffs', (req, res) => {
+  const { admin_id, tariff_id, name, price, days, maxBots, maxSites, description } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+  if (!tariff_id) return res.status(400).json({ error: 'tariff_id talab qilinadi' });
+
+  const updated = db.updateTariff(tariff_id, {
+    name,
+    price,
+    days,
+    maxBots,
+    maxSites,
+    description
+  });
+  res.json({ success: true, tariff: updated, tariffs: db.getTariffs() });
 });
 
 // Admin Broadcast (Xabar tarqatish - Barcha foydalanuvchilarga)

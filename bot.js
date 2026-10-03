@@ -34,7 +34,8 @@ function getMainMenuKeyboard(userId) {
     ['🤖 Bot Yaratish'],
     ['📋 Mening Botlarim', '🌐 Web App'],
     ['👤 Mening Profilim', '⏳ Tarifim & Qolgan Vaqt'],
-    ['💳 Balans & To\'lov', '📞 Aloqa / Yordam']
+    ['💎 Tariflar & VIP Ma\'lumot', '💳 Balans & To\'lov'],
+    ['📞 Aloqa / Yordam']
   ];
   if (isAdmin(userId)) {
     rows.push(['👑 Admin Panel']);
@@ -70,7 +71,7 @@ const profileKeyboard = Markup.keyboard([
 const adminMenuKeyboard = Markup.keyboard([
   ['📊 Statistika & Faollik', '👥 Foydalanuvchilar'],
   ['🏆 Mijozlar Reytingi', '📢 Hammaga Xabar Yuborish'],
-  ['⬅️ Asosiy Menyu']
+  ['⚙️ Tariflarni Boshqarish', '⬅️ Asosiy Menyu']
 ]).resize();
 
 // Middleware (Profil rasmi va ma'lumotlarni saqlash)
@@ -113,7 +114,7 @@ bot.command('start', async (ctx) => {
 
   const user = db.getOrCreateUser(userId, { name, username: ctx.from.username || '', photo_url: photoUrl });
   const remaining = db.getRemainingTime(userId);
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const userBots = db.getBotsByUser(userId);
   const activeCount = userBots.filter(b => b.is_active).length;
   const detailedUsers = db.getAllUsersDetailed();
@@ -152,28 +153,31 @@ bot.hears('🤖 Bot Yaratish', async (ctx) => {
   const remaining = db.getRemainingTime(userId);
   if (remaining.isExpired && !isAdmin(userId)) {
     return ctx.replyWithHTML(
-      `⚠️ <b>Kechirasiz, sizning tarifingiz muddati tugagan!</b>\n\nYangi bot yaratish uchun pastdagi "💳 Balans & To'lov" tugmasi orqali hisobingizni to'ldiring yoki tarifni yangilang.`,
+      `⚠️ <b>Kechirasiz, sizning tarifingiz muddati tugagan!</b>\n\nYangi bot yaratish uchun pastdagi "💎 Tariflar & VIP Ma'lumot" yoki "💳 Balans & To'lov" tugmasi orqali hisobingizni to'ldiring yoki tarifni yangilang.`,
       getMainMenuKeyboard(userId)
     );
   }
 
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const userBots = db.getBotsByUser(userId);
   const maxBots = tariffObj.maxBots || 1;
 
-  // Oddiy mijozlar uchun 1 ta bot limiti, tarif olinsa ko'proq!
+  // Oddiy mijozlar uchun limit tekshiruvi
   if (userBots.length >= maxBots && !isAdmin(userId)) {
+    const allTariffs = db.getTariffs();
+    let promoText = '';
+    Object.values(allTariffs).filter(t => t.price > 0).forEach(t => {
+      promoText += `• <b>${t.name}:</b> ${t.maxBots >= 999 ? 'Cheksiz' : t.maxBots + ' ta bot'} (${t.price.toLocaleString()} so'm / ${t.days} kun)\n`;
+    });
+
     return ctx.replyWithHTML(
       `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan!</b>\n\n` +
       `• Sizning tarifingiz: <b>${tariffObj.name}</b>\n` +
       `• Ruxsat etilgan botlar: <b>${maxBots} ta</b>\n` +
       `• Yaratilgan botlaringiz: <b>${userBots.length} ta</b>\n\n` +
-      `Oddiy mijozlar sinov tarifida faqat <b>1 ta bot</b> yarata oladi! Ko'proq bot yaratish uchun tarif sotib oling:\n\n` +
-      `🌱 <b>Starter (1 oylik):</b> 3 ta bot (15,000 so'm)\n` +
-      `⭐ <b>Pro Standart (1 oylik):</b> 10 ta bot (25,000 so'm)\n` +
-      `💼 <b>Business (3 oylik):</b> 25 ta bot (60,000 so'm)\n` +
-      `👑 <b>VIP Lifetime (Umrbod):</b> Cheksiz botlar (150,000 so'm)\n\n` +
-      `<i>Tarif olish uchun pastdagi "💳 Balans & To'lov" tugmasini bosing!</i>`,
+      `Ko'proq bot yaratish uchun tarifni yangilang:\n\n` +
+      promoText + `\n` +
+      `<i>Barcha ma'lumotlar va tarifni faollashtirish uchun pastdagi "💎 Tariflar & VIP Ma'lumot" tugmasini bosing!</i>`,
       getMainMenuKeyboard(userId)
     );
   }
@@ -231,14 +235,14 @@ Object.keys(botTypeMap).forEach(key => {
   bot.hears(key, async (ctx) => {
     const userId = ctx.from.id;
     const user = db.getUser(userId) || {};
-    const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+    const tariffObj = db.getTariff(user.tariff);
     const userBots = db.getBotsByUser(userId);
     const maxBots = tariffObj.maxBots || 1;
 
     if (userBots.length >= maxBots && !isAdmin(userId)) {
       userStates.delete(userId);
       return ctx.replyWithHTML(
-        `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan (${userBots.length}/${maxBots} ta)!</b>\n\nKo'proq bot yaratish uchun "💳 Balans & To'lov" tugmasi orqali tarifni oshiring!`,
+        `⚠️ <b>Kechirasiz, sizning bot yaratish limitingiz to'lgan (${userBots.length}/${maxBots} ta)!</b>\n\nKo'proq bot yaratish uchun "💎 Tariflar & VIP Ma'lumot" tugmasi orqali tarifni oshiring!`,
         getMainMenuKeyboard(userId)
       );
     }
@@ -268,7 +272,7 @@ bot.hears('📋 Mening Botlarim', async (ctx) => {
   userStates.delete(userId);
 
   const user = db.getUser(userId) || {};
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const userBots = db.getBotsByUser(userId);
   const maxBots = tariffObj.maxBots || 1;
 
@@ -466,7 +470,7 @@ bot.hears('👤 Mening Profilim', async (ctx) => {
 
   const user = db.getUser(userId) || {};
   const remaining = db.getRemainingTime(userId);
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const userBots = db.getBotsByUser(userId);
   const userSites = db.getSitesByUser(userId);
   const detailedUsers = db.getAllUsersDetailed();
@@ -508,29 +512,141 @@ bot.hears('⏳ Tarifim & Qolgan Vaqt', async (ctx) => {
   const userId = ctx.from.id;
   userStates.delete(userId);
 
-  const user = db.getUser(userId);
+  const user = db.getUser(userId) || {};
   const remaining = db.getRemainingTime(userId);
-  const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+  const tariffObj = db.getTariff(user.tariff);
   const userBots = db.getBotsByUser(userId);
+  const tariffs = db.getTariffs();
 
-  const text = 
-`⏳ <b>Sizning Tarifingiz & Muddat:</b>
+  let text = 
+`⏳ <b>Sizning Tarifingiz & Muddat:</b>\n\n` +
+`• 🏷 <b>Amaldagi tarif:</b> <b>${tariffObj.name}</b>\n` +
+`• ⏱ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>\n` +
+`• 💰 <b>Balansingiz:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>\n` +
+`• 🤖 <b>Botlaringiz:</b> ${userBots.length} ta / limit: ${tariffObj.maxBots >= 999 ? 'Cheksiz' : tariffObj.maxBots + ' ta'}\n\n` +
+`💎 <b>Mavjud Tarif Rejalari (Yagona Baza):</b>\n`;
 
-• 🏷 <b>Amaldagi tarif:</b> <b>${tariffObj.name}</b>
-• ⏱ <b>Qolgan vaqt:</b> <b>${remaining.text}</b>
-• 💰 <b>Balansingiz:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>
-• 🤖 <b>Botlaringiz:</b> ${userBots.length} ta / limit: ${tariffObj.maxSites} ta
+  Object.values(tariffs).forEach((t, i) => {
+    const pStr = t.price === 0 ? 'Bepul' : `${t.price.toLocaleString()} so'm`;
+    text += `${i + 1}. <b>${t.name}:</b> ${pStr} (${t.days} kun, ${t.maxBots >= 999 ? 'Cheksiz' : t.maxBots + ' ta'} bot)\n`;
+  });
 
-💎 <b>Mavjud Tarif Rejalari:</b>
-1. <b>🎁 Bepul Sinov:</b> 3 kun (1 ta bot)
-2. <b>🌱 Starter (1 oylik):</b> 15,000 so'm (3 ta bot)
-3. <b>⭐ Pro Standart (1 oylik):</b> 25,000 so'm (10 ta bot)
-4. <b>💼 Business (3 oylik):</b> 60,000 so'm (25 ta bot)
-5. <b>👑 VIP Lifetime (Umrbod):</b> 150,000 so'm (Cheksiz botlar)
-
-<i>Hisobni to'ldirish uchun pastdagi "💳 Balans & To'lov" tugmasini bosing.</i>`;
+  text += `\n<i>Barcha tafsilotlar va tarifni faollashtirish uchun pastdagi "💎 Tariflar & VIP Ma'lumot" tugmasini bosing!</i>`;
 
   await ctx.replyWithHTML(text, getMainMenuKeyboard(userId));
+});
+
+// ==================== 💎 TARIFLAR VA VIP MA'LUMOT ====================
+bot.hears(['💎 Tariflar & VIP Ma\'lumot', '/tariffs', '/vip', '/tariflar', '/tarif'], async (ctx) => {
+  const userId = ctx.from.id;
+  userStates.delete(userId);
+
+  const user = db.getUser(userId) || {};
+  const remaining = db.getRemainingTime(userId);
+  const currentTariff = db.getTariff(user.tariff);
+  const tariffs = db.getTariffs();
+
+  let text = 
+`💎 <b>TARIF REJALARI VA VIP MA'LUMOT</b>\n\n` +
+`Siz tanlagan tarifingizga qarab platformamiz sizga ma'lum kunlik (masalan: 5 kun, 10 kun, 30 kun) kafolatlangan 24/7 hosting va qo'shimcha bot yaratish imkoniyatlarini taqdim etadi!\n\n` +
+`👤 <b>Sizning joriy holatingiz:</b>\n` +
+`• Tarif: <b>${currentTariff.name}</b>\n` +
+`• Qolgan muddat: <b>${remaining.text}</b>\n` +
+`• Balans: <b>${(user.balance || 0).toLocaleString()} so'm</b>\n\n` +
+`━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  const inlineButtons = [];
+
+  Object.values(tariffs).forEach((t) => {
+    const pStr = t.price === 0 ? 'BEPUL' : `${t.price.toLocaleString()} so'm`;
+    text += `<b>${t.name}</b>\n`;
+    text += `• ⏱ <b>Beriladigan muddat:</b> <b>${t.days} kun</b>\n`;
+    text += `• 💰 <b>Narxi:</b> <b>${pStr}</b>\n`;
+    text += `• 🤖 <b>Botlar soni:</b> <b>${t.maxBots >= 999 ? 'Cheksiz (999+)' : t.maxBots + ' tagacha'}</b>\n`;
+    text += `• 🌐 <b>Saytlar soni:</b> <b>${t.maxSites >= 999 ? 'Cheksiz (999+)' : t.maxSites + ' tagacha'}</b>\n`;
+    text += `• 📌 <b>Tavsif:</b> <i>${t.description}</i>\n\n`;
+
+    if (t.price > 0) {
+      inlineButtons.push([
+        Markup.button.callback(`🛍 ${t.name.split('(')[0].trim()} (${pStr} / ${t.days} kun)`, `buy_tariff_${t.id}`)
+      ]);
+    }
+  });
+
+  text += `━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💡 <i>Hisobingizda yetarli mablag' bo'lsa, kerakli tarif tugmasini bosib darhol faollashtirishingiz mumkin!</i>`;
+
+  inlineButtons.push([
+    Markup.button.callback('💳 Balansni To\'ldirish (Karta)', 'action_topup_balance')
+  ]);
+
+  await ctx.replyWithHTML(text, Markup.inlineKeyboard(inlineButtons));
+});
+
+// Tarif sotib olish callback
+bot.action(/^buy_tariff_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const user = db.getUser(userId) || {};
+  const tariffs = db.getTariffs();
+  const tariff = tariffs[tariffId];
+
+  if (!tariff) {
+    return ctx.answerCbQuery('Tarif topilmadi!', { show_alert: true });
+  }
+
+  const currentBalance = user.balance || 0;
+  if (currentBalance < tariff.price) {
+    const diff = tariff.price - currentBalance;
+    await ctx.answerCbQuery('Mablag\' yetarli emas!', { show_alert: true });
+    return ctx.replyWithHTML(
+      `⚠️ <b>Mablag'ingiz yetarli emas!</b>\n\n` +
+      `• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+      `• Narxi: <b>${tariff.price.toLocaleString()} so'm</b> (${tariff.days} kunlik obuna)\n` +
+      `• Sizning balansingiz: <b>${currentBalance.toLocaleString()} so'm</b>\n` +
+      `• Yetishmayotgan summa: <b>${diff.toLocaleString()} so'm</b>\n\n` +
+      `💳 <i>To'lov qilish uchun pastdagi kartaga pul o'tkazing va chekni botga yuboring:</i>\n` +
+      `💳 Karta: <code>${config.CARD_NUMBER}</code>\n` +
+      `👤 Egasi: <b>${config.CARD_HOLDER}</b>`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('💳 To\'lov Yo\'riqnomasi', 'action_topup_balance')]
+      ])
+    );
+  }
+
+  // Balansdan yechish va tarif biriktirish
+  db.addBalance(userId, -tariff.price);
+  db.setTariff(userId, tariffId, tariff.days);
+  const updatedRem = db.getRemainingTime(userId);
+  const updatedUser = db.getUser(userId);
+
+  await ctx.answerCbQuery('🎉 Tarif muvaffaqiyatli faollashtirildi!', { show_alert: true });
+  await ctx.replyWithHTML(
+    `🎉 <b>TABRIKLAYMIZ! YANGI TARIFINGIZ FAOLLASHTIRILDI!</b>\n\n` +
+    `• Amaldagi tarif: <b>${tariff.name}</b>\n` +
+    `• Berilgan muddat: <b>${tariff.days} kun</b>\n` +
+    `• Amal qilish muddati: <b>${updatedRem.text}</b> gacha\n` +
+    `• Botlar limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz' : tariff.maxBots + ' ta'}</b>\n` +
+    `• Qolgan balansingiz: <b>${(updatedUser.balance || 0).toLocaleString()} so'm</b>\n\n` +
+    `<i>Barcha bot va saytlaringiz 24/7 uzluksiz ishlaydi!</i> 🚀`,
+    getMainMenuKeyboard(userId)
+  );
+});
+
+// To'lov yo'riqnomasi callback
+bot.action('action_topup_balance', async (ctx) => {
+  await ctx.answerCbQuery();
+  const text = 
+`💳 <b>Hisobni To'ldirish & To'lov Rekvizitlari</b>\n\n` +
+`Istalgan tarifni sotib olish uchun quyidagi kartaga to'lov qiling:\n\n` +
+`💳 <b>Karta raqam:</b> <code>${config.CARD_NUMBER}</code>\n` +
+`👤 <b>Karta egasi:</b> <b>${config.CARD_HOLDER}</b>\n\n` +
+`📌 <b>To'lov tartibi:</b>\n` +
+`1. Kartaga kerakli summani o'tkazing.\n` +
+`2. To'lov chekini skrinshot qilib ushbu botga rasm holatida yuboring!\n` +
+`3. Administrator chekni tasdiqlab, balansingizni darhol to'ldirib beradi.`;
+
+  await ctx.replyWithHTML(text, getMainMenuKeyboard(ctx.from.id));
 });
 
 // ==================== BALANS VA TO'LOV ====================
@@ -707,13 +823,15 @@ bot.command('settariff', async (ctx) => {
   const parts = ctx.message.text.split(' ');
   const targetId = parts[1];
   const tariff = parts[2];
-  if (!targetId || !tariff) return ctx.reply('Format: /settariff USER_ID TARIF');
+  const customDays = parts[3] ? Number(parts[3]) : null;
+  if (!targetId || !tariff) return ctx.reply('Format: /settariff USER_ID TARIF [KUN]');
 
-  const u = db.setTariff(targetId, tariff);
+  const u = db.setTariff(targetId, tariff, customDays);
   if (u) {
-    const tariffObj = config.TARIFFS[tariff] || { name: tariff };
-    ctx.reply(`✅ Foydalanuvchi ${targetId} ga ${tariffObj.name} tarifi biriktirildi!`);
-    bot.telegram.sendMessage(targetId, `🎉 Sizga yangi tarif biriktirildi: <b>${tariffObj.name}</b>!`, { parse_mode: 'HTML' }).catch(()=>{});
+    const tariffObj = db.getTariff(tariff);
+    const rem = db.getRemainingTime(targetId);
+    ctx.reply(`✅ Foydalanuvchi ${targetId} ga ${tariffObj.name} tarifi biriktirildi! Yangi muddat: ${rem.text}`);
+    bot.telegram.sendMessage(targetId, `🎉 Sizga yangi tarif biriktirildi: <b>${tariffObj.name}</b> (${rem.text})!`, { parse_mode: 'HTML' }).catch(()=>{});
   } else {
     ctx.reply('Foydalanuvchi topilmadi.');
   }
@@ -752,6 +870,104 @@ bot.command('setphone', async (ctx) => {
   } else {
     ctx.reply('Foydalanuvchi topilmadi.');
   }
+});
+
+// ==================== TARIFLARNI BOSHQARISH (ADMIN) ====================
+bot.hears('⚙️ Tariflarni Boshqarish', async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return;
+  userStates.delete(userId);
+
+  const tariffs = db.getTariffs();
+  let text = 
+`⚙️ <b>TARIFLARNI BOSHQARISH (YAGONA BAZA)</b>\n\n` +
+`Bu yerdagi o'zgarishlar Botda ham, Web Appda ham <b>bir zumda</b> kuchga kiradi!\n\n` +
+`Har bir tarifning <b>narxini</b> yoki <b>amal qilish kunini (masalan: 5 kun, 10 kun, 30 kun)</b> o'zgartirish uchun kerakli tugmani bosing:\n\n`;
+
+  const buttons = [];
+
+  Object.values(tariffs).forEach(t => {
+    const pStr = t.price === 0 ? 'Bepul' : `${t.price.toLocaleString()} so'm`;
+    text += `• <b>${t.name}:</b> ${pStr} | <b>${t.days} kun</b> | limit: ${t.maxBots >= 999 ? 'Cheksiz' : t.maxBots + ' ta'}\n`;
+    
+    buttons.push([
+      Markup.button.callback(`💰 ${t.name.split('(')[0].trim()} Narxi`, `adm_t_price_${t.id}`),
+      Markup.button.callback(`📅 ${t.days} kunni o'zgartirish`, `adm_t_days_${t.id}`)
+    ]);
+  });
+
+  text += `\n<i>Shuningdek buyruqlar orqali ham o'zgartirish mumkin:\n/setprice vip 45000\n/setdays vip 10</i>`;
+
+  await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+});
+
+bot.command(['admin_tariffs', 'tariffs_admin'], async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const tariffs = db.getTariffs();
+  let text = `⚙️ <b>Tariflar ro'yxati (Baza):</b>\n\n`;
+  Object.values(tariffs).forEach(t => {
+    text += `• <b>${t.id}:</b> ${t.name} — ${t.price} so'm, ${t.days} kun\n`;
+  });
+  text += `\nO'zgartirish: /setprice ID NARX yoki /setdays ID KUN`;
+  await ctx.replyWithHTML(text);
+});
+
+bot.action(/^adm_t_price_(.+)$/, async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const tariffId = ctx.match[1];
+  const tariff = db.getTariff(tariffId);
+
+  userStates.set(userId, { step: 'edit_tariff_price', tariffId });
+  await ctx.answerCbQuery();
+  await ctx.replyWithHTML(
+    `💰 <b>${tariff.name}</b> uchun yangi narxni kiriting (so'mda, masalan: <code>45000</code> yoki <code>0</code>):`,
+    cancelKeyboard
+  );
+});
+
+bot.action(/^adm_t_days_(.+)$/, async (ctx) => {
+  const userId = ctx.from.id;
+  if (!isAdmin(userId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const tariffId = ctx.match[1];
+  const tariff = db.getTariff(tariffId);
+
+  userStates.set(userId, { step: 'edit_tariff_days', tariffId });
+  await ctx.answerCbQuery();
+  await ctx.replyWithHTML(
+    `📅 <b>${tariff.name}</b> uchun necha kun berilishini kiriting (kun soni, masalan: <code>5</code>, <code>10</code> yoki <code>30</code>):`,
+    cancelKeyboard
+  );
+});
+
+bot.command('setprice', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const parts = ctx.message.text.split(' ');
+  const tariffId = parts[1]?.toLowerCase();
+  const price = Number(parts[2]);
+  if (!tariffId || isNaN(price)) {
+    return ctx.reply('Format: /setprice TARIF_ID NARX (Masalan: /setprice vip 45000)');
+  }
+
+  const updated = db.updateTariff(tariffId, { price });
+  ctx.replyWithHTML(
+    `✅ <b>Tarif narxi yangilandi!</b>\n\n• Tarif: <b>${updated.name}</b>\n• Yangi narx: <b>${updated.price.toLocaleString()} so'm</b>\n• Muddati: <b>${updated.days} kun</b>\n\n<i>Baza Bot va Web Appda bir zumda sinxronlandi!</i>`
+  );
+});
+
+bot.command('setdays', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const parts = ctx.message.text.split(' ');
+  const tariffId = parts[1]?.toLowerCase();
+  const days = Number(parts[2]);
+  if (!tariffId || isNaN(days) || days <= 0) {
+    return ctx.reply('Format: /setdays TARIF_ID KUN (Masalan: /setdays vip 10)');
+  }
+
+  const updated = db.updateTariff(tariffId, { days });
+  ctx.replyWithHTML(
+    `✅ <b>Tarif amal qilish muddati (kunlar soni) yangilandi!</b>\n\n• Tarif: <b>${updated.name}</b>\n• Yangi muddat: <b>${updated.days} kun</b>\n• Narxi: <b>${updated.price.toLocaleString()} so'm</b>\n\n<i>Baza Bot va Web Appda bir zumda sinxronlandi!</i>`
+  );
 });
 
 // ==================== HAMMAGA XABAR YUBORISH (RASSILKA) ====================
@@ -843,6 +1059,44 @@ bot.on('text', async (ctx) => {
     return;
   }
 
+  // TARIF NARXINI O'ZGARTIRISH (ADMIN)
+  if (state.step === 'edit_tariff_price' && isAdmin(userId)) {
+    const rawPrice = text.replace(/[^0-9]/g, '');
+    const price = Number(rawPrice);
+    if (!rawPrice || isNaN(price) || price < 0) {
+      return ctx.reply('❌ Iltimos to\'g\'ri narx kiriting (so\'mda, masalan: 40000 yoki 0):', cancelKeyboard);
+    }
+    userStates.delete(userId);
+    const updated = db.updateTariff(state.tariffId, { price });
+    return ctx.replyWithHTML(
+      `✅ <b>Tarif narxi muvaffaqiyatli yangilandi!</b>\n\n` +
+      `• Tarif: <b>${updated.name}</b>\n` +
+      `• Yangi narx: <b>${updated.price.toLocaleString()} so'm</b>\n` +
+      `• Muddati: <b>${updated.days} kun</b>\n\n` +
+      `<i>Bu o'zgarish Botda ham, Web Appda ham bir zumda yangilandi!</i>`,
+      adminMenuKeyboard
+    );
+  }
+
+  // TARIF KUNLAR SONINI O'ZGARTIRISH (ADMIN)
+  if (state.step === 'edit_tariff_days' && isAdmin(userId)) {
+    const rawDays = text.replace(/[^0-9]/g, '');
+    const days = Number(rawDays);
+    if (!rawDays || isNaN(days) || days <= 0) {
+      return ctx.reply('❌ Iltimos to\'g\'ri kunlar sonini kiriting (masalan: 5, 10 yoki 30):', cancelKeyboard);
+    }
+    userStates.delete(userId);
+    const updated = db.updateTariff(state.tariffId, { days });
+    return ctx.replyWithHTML(
+      `✅ <b>Tarif amal qilish muddati (kunlar soni) muvaffaqiyatli yangilandi!</b>\n\n` +
+      `• Tarif: <b>${updated.name}</b>\n` +
+      `• Yangi muddat: <b>${updated.days} kun</b>\n` +
+      `• Narxi: <b>${updated.price.toLocaleString()} so'm</b>\n\n` +
+      `<i>Bu o'zgarish Botda ham, Web Appda ham bir zumda yangilandi!</i>`,
+      adminMenuKeyboard
+    );
+  }
+
   // BOT TOKEN KUTISH BOSQICHI
   if (state.step === 'awaiting_bot_token') {
     // Bot tokeni chatda turib qolmasligi uchun foydalanuvchi yuborgan xabarni darhol o'chiramiz
@@ -850,7 +1104,7 @@ bot.on('text', async (ctx) => {
       await ctx.deleteMessage(ctx.message.message_id);
     } catch (e) {}
     const user = db.getUser(userId) || {};
-    const tariffObj = config.TARIFFS[user.tariff] || config.TARIFFS.trial;
+    const tariffObj = db.getTariff(user.tariff);
     const userBots = db.getBotsByUser(userId);
     const maxBots = tariffObj.maxBots || 1;
 

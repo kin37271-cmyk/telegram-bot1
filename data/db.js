@@ -15,6 +15,53 @@ function getInitialDB() {
     sites: {},
     bots: {},
     payments: {},
+    tariffs: {
+      trial: {
+        id: 'trial',
+        name: '🎁 3 Kunlik Bepul Sinov',
+        price: 0,
+        days: 3,
+        maxBots: 1,
+        maxSites: 1,
+        description: 'Boshlang\'ich sinov: 1 ta bot va 1 ta sayt yaratish imkoniyati.'
+      },
+      starter: {
+        id: 'starter',
+        name: '🌱 Starter (5 Kunlik)',
+        price: 10000,
+        days: 5,
+        maxBots: 3,
+        maxSites: 3,
+        description: '3 tagacha bot & 3 ta sayt, 5 kun faol 24/7 hosting, tezkor ishlash.'
+      },
+      standart: {
+        id: 'standart',
+        name: '⚡ Standart (10 Kunlik)',
+        price: 20000,
+        days: 10,
+        maxBots: 10,
+        maxSites: 10,
+        description: '10 tagacha bot & 10 ta sayt, 10 kun faol 24/7 hosting, yuqori tezlik.'
+      },
+      pro: {
+        id: 'pro',
+        name: '⭐ Pro Premium (30 Kunlik)',
+        price: 35000,
+        days: 30,
+        maxBots: 25,
+        maxSites: 25,
+        description: '25 tagacha bot & 25 ta sayt, 1 oy to\'liq kafolatli 24/7 avto hosting.'
+      },
+      vip: {
+        id: 'vip',
+        name: '👑 VIP Maxsus Reja',
+        price: 50000,
+        days: 30,
+        maxBots: 999,
+        maxSites: 999,
+        description: 'Cheksiz botlar va saytlar (999 ta), barcha 16 ta bot turidan foydalanish, VIP yordam.'
+      }
+    },
     settings: {
       owner_id: config.OWNER_ID,
       card_number: config.CARD_NUMBER,
@@ -32,6 +79,7 @@ function loadDB() {
       const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
       memoryDB = { ...getInitialDB(), ...data };
       if (!memoryDB.bots) memoryDB.bots = {};
+      if (!memoryDB.tariffs) memoryDB.tariffs = getInitialDB().tariffs;
       return memoryDB;
     }
   } catch (err) {
@@ -194,12 +242,58 @@ const dbManager = {
     return user;
   },
 
+  // TARIFFS (Yagona baza va dinamik boshqaruv)
+  getTariffs() {
+    const db = loadDB();
+    if (!db.tariffs) {
+      db.tariffs = getInitialDB().tariffs;
+      saveDB(db);
+    }
+    return db.tariffs;
+  },
+
+  getTariff(tariffId) {
+    const tariffs = this.getTariffs();
+    return tariffs[tariffId] || tariffs.trial;
+  },
+
+  updateTariff(tariffId, data) {
+    const db = loadDB();
+    if (!db.tariffs) db.tariffs = getInitialDB().tariffs;
+    if (!db.tariffs[tariffId]) {
+      db.tariffs[tariffId] = {
+        id: tariffId,
+        name: data.name || tariffId,
+        price: Number(data.price || 0),
+        days: Number(data.days || 30),
+        maxBots: Number(data.maxBots || 10),
+        maxSites: Number(data.maxSites || 10),
+        description: data.description || ''
+      };
+    } else {
+      db.tariffs[tariffId] = {
+        ...db.tariffs[tariffId],
+        ...data,
+        id: tariffId,
+        price: data.price !== undefined ? Number(data.price) : db.tariffs[tariffId].price,
+        days: data.days !== undefined ? Number(data.days) : db.tariffs[tariffId].days,
+        maxBots: data.maxBots !== undefined ? Number(data.maxBots) : db.tariffs[tariffId].maxBots,
+        maxSites: data.maxSites !== undefined ? Number(data.maxSites) : db.tariffs[tariffId].maxSites,
+        name: data.name !== undefined ? String(data.name) : db.tariffs[tariffId].name,
+        description: data.description !== undefined ? String(data.description) : db.tariffs[tariffId].description
+      };
+    }
+    saveDB(db);
+    return db.tariffs[tariffId];
+  },
+
   setTariff(userId, tariffId, customDays = null) {
     const db = loadDB();
     const user = db.users[userId];
     if (!user) return null;
 
-    const tariff = config.TARIFFS[tariffId];
+    const tariffs = this.getTariffs();
+    const tariff = tariffs[tariffId];
     if (tariff) {
       user.tariff = tariffId;
       const days = customDays !== null ? Number(customDays) : tariff.days;

@@ -1,6 +1,20 @@
 const { Telegraf, Markup } = require('telegraf');
 const db = require('../data/db');
 
+let alldl;
+try {
+  alldl = require('rahad-all-downloader-v2').alldl;
+} catch (e) {
+  console.error('rahad-all-downloader-v2 not available:', e.message);
+}
+
+let btchDl;
+try {
+  btchDl = require('btch-downloader');
+} catch (e) {
+  console.error('btch-downloader not available:', e.message);
+}
+
 // Running bot instances map: botId -> telegrafInstance
 const runningBots = new Map();
 
@@ -150,9 +164,28 @@ async function translateText(text) {
   }
 }
 
-// 🎬 Real Video Yuklovchi (TikTok HD no-watermark, Instagram, YouTube, Pinterest)
+// 🎬 Real Video Yuklovchi (Instagram, TikTok HD no-watermark, YouTube, Pinterest, Facebook)
 async function extractVideo(url) {
-  // 1. TikTok
+  // 1. rahad-all-downloader-v2 (Instagram Reels, TikTok, YouTube, Threads, Pinterest)
+  if (alldl) {
+    try {
+      const res = await alldl(url);
+      if (res && res.data && res.data.videoUrl) {
+        return {
+          success: true,
+          platform: url.includes('instagram') ? 'Instagram' : url.includes('tiktok') ? 'TikTok' : url.includes('youtu') ? 'YouTube' : 'Media',
+          videoUrl: res.data.videoUrl,
+          hdUrl: res.data.videoUrl,
+          title: res.data.title || 'Video',
+          quality: '1080p Full HD (Tiniq va Suvsiz)'
+        };
+      }
+    } catch (e) {
+      console.error('alldl extraction error:', e.message);
+    }
+  }
+
+  // 2. TikTok tezkor maxsus resolver (tikwm.com)
   if (url.includes('tiktok.com') || url.includes('douyin.com')) {
     try {
       const res = await fetch('https://www.tikwm.com/api/', {
@@ -179,7 +212,27 @@ async function extractVideo(url) {
     }
   }
 
-  // 2. VKr / Universal Video Web Resolver
+  // 3. YouTube video resolver (btchDl)
+  if ((url.includes('youtu.be') || url.includes('youtube.com')) && btchDl?.youtube) {
+    try {
+      const ytData = await btchDl.youtube(url);
+      if (ytData && (ytData.mp4 || ytData.url)) {
+        return {
+          success: true,
+          platform: 'YouTube',
+          videoUrl: ytData.mp4 || ytData.url,
+          hdUrl: ytData.mp4 || ytData.url,
+          title: ytData.title || 'YouTube Video',
+          author: ytData.author || '',
+          quality: '1080p HD'
+        };
+      }
+    } catch (e) {
+      console.error('btch youtube error:', e.message);
+    }
+  }
+
+  // 4. VKr / Universal Video Web Resolver fallback
   try {
     const vkrEndpoint = 'https://vkrdownloader.org/download.php?vkr=' + encodeURIComponent(url);
     const res = await fetch(vkrEndpoint, {
@@ -205,11 +258,33 @@ async function extractVideo(url) {
         };
       }
     }
-  } catch (e) {
-    // continue
-  }
+  } catch (e) {}
 
   return { success: false, error: 'Video manbasi aniqlanmadi' };
+}
+
+// 🎵 Real MP3 Audio Fetcher (320kbps Studio Master)
+async function getAudioForQuery(query) {
+  if (!btchDl) return null;
+  try {
+    const searchRes = await btchDl.yts(query);
+    const items = searchRes?.result?.all || searchRes?.result || [];
+    const video = items.find(x => x.type === 'video') || items[0];
+    if (video && video.url) {
+      const ytData = await btchDl.youtube(video.url);
+      if (ytData && (ytData.mp3 || ytData.audio)) {
+        return {
+          title: ytData.title || video.title || query,
+          performer: ytData.author || video.author?.name || 'Artist',
+          audioUrl: ytData.mp3 || ytData.audio,
+          thumbnail: ytData.thumbnail || video.thumbnail
+        };
+      }
+    }
+  } catch (e) {
+    console.error('getAudioForQuery error:', e.message);
+  }
+  return null;
 }
 
 // 🎵 Xonandalar va Mashhur Qo'shiqlar Katalogi
@@ -819,56 +894,71 @@ function setupBotHandlers(clientBot, botRecord) {
       try {
         const result = await extractVideo(url);
         if (result.success && result.videoUrl) {
+          const captionText =
+            `🎬 <b>${escapeHtml(result.title)}</b>\n\n` +
+            `✨ <b>Sifati:</b> ${result.quality || '1080p Full HD'}\n` +
+            (result.author ? `👤 <b>Muallif:</b> @${escapeHtml(result.author)}\n` : '') +
+            (result.duration ? `⏱ <b>Davomiyligi:</b> ${result.duration} soniya\n` : '') +
+            `💧 <b>Suv belgisi:</b> Tozalandi (Watermark-free)\n\n` +
+            `📥 <i>@${botRecord.botUsername || 'YuklovchiBot'} orqali tiniq sifatda yuklandi!</i>`;
+
+          let sent = false;
+
+          // 1. URL orqali to'g'ridan-to'g'ri Telegram video yuborish
           try {
             await ctx.replyWithVideo(
               { url: result.videoUrl },
               {
-                caption:
-                  `🎬 <b>${escapeHtml(result.title)}</b>\n\n` +
-                  `✨ <b>Sifati:</b> ${result.quality || '1080p Full HD'}\n` +
-                  (result.author ? `👤 <b>Muallif:</b> @${escapeHtml(result.author)}\n` : '') +
-                  (result.duration ? `⏱ <b>Davomiyligi:</b> ${result.duration} soniya\n` : '') +
-                  `💧 <b>Suv belgisi:</b> Tozalandi (Watermark-free)\n\n` +
-                  `📥 <i>@${botRecord.botUsername || 'YuklovchiBot'} orqali tiniq sifatda yuklandi!</i>`,
-                parse_mode: 'HTML',
-                reply_markup: result.musicUrl ? {
-                  inline_keyboard: [
-                    [{ text: '🎵 Audiosini (MP3) yuklab olish', url: result.musicUrl }],
-                    [{ text: '📥 HD Video Fayl havolasi', url: result.hdUrl || result.videoUrl }]
-                  ]
-                } : {
-                  inline_keyboard: [
-                    [{ text: '📥 HD Video Fayl havolasi', url: result.hdUrl || result.videoUrl }]
-                  ]
-                }
+                caption: captionText,
+                parse_mode: 'HTML'
               }
             );
-            try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
-            return;
+            sent = true;
           } catch (vidErr) {
-            console.error('replyWithVideo failed, fallback to direct button:', vidErr.message);
+            console.error('replyWithVideo by url failed, downloading buffer:', vidErr.message);
           }
+
+          // 2. Agar Telegram URL ni yuklay olmasa, videoni o'zimiz yuklab olib fayl qilib yuboramiz
+          if (!sent) {
+            try {
+              const vResp = await fetch(result.videoUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+              });
+              if (vResp.ok) {
+                const vBuffer = Buffer.from(await vResp.arrayBuffer());
+                await ctx.replyWithVideo(
+                  { source: vBuffer, filename: 'video.mp4' },
+                  {
+                    caption: captionText,
+                    parse_mode: 'HTML'
+                  }
+                );
+                sent = true;
+              }
+            } catch (bufErr) {
+              console.error('replyWithVideo buffer upload error:', bufErr.message);
+            }
+          }
+
+          try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
+          if (sent) return;
         }
 
-        // Direct high-quality download card
-        await ctx.replyWithHTML(
-          `✅ <b>Video muvaffaqiyatli tayyorlandi!</b>\n\n` +
-          `🎬 <b>Sifati:</b> 1080p Full HD (Tiniq va original)\n` +
-          `💧 <b>Suv belgisi:</b> Tozalandi (Watermark-free)\n` +
-          `📦 <b>Format:</b> MP4 Video\n\n` +
-          `<i>Videoni to'g'ridan-to'g'ri qurilmangizga yuklab olish uchun quyidagi tugmani bosing:</i>`,
-          Markup.inlineKeyboard([
-            [Markup.button.url('📥 Videoni Yuklab Olish (Full HD)', result.videoUrl || url)],
-            [Markup.button.url('🎬 Onlayn Ko\'rish (Player)', url)]
-          ])
-        );
+        // Agar video topilmasa
         try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
+        await ctx.replyWithHTML(
+          `⚠️ <b>Videoni yuklab bo'lmadi!</b>\n\n` +
+          `• Profil yoki video yopiq (private) bo'lishi mumkin;\n` +
+          `• Havoladan to'g'ri nusxa olinganligiga ishonch hosil qiling.\n\n` +
+          `Iltimos, ochiq (public) post yoki reel havolasini yuboring:\n` +
+          `Masalan: <code>https://www.instagram.com/reel/...</code> yoki <code>https://vt.tiktok.com/...</code>`
+        );
       } catch (err) {
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
         console.error('Downloader error:', err);
         await ctx.replyWithHTML(
           `⚠️ <b>Videoni yuklab olishda xatolik yuz berdi.</b>\n\n` +
-          `Iltimos, havola to'g'riligini tekshiring va qayta urinib ko'ring.\n\n` +
-          `Masalan: <code>https://vt.tiktok.com/...</code>`
+          `Iltimos, havola to'g'riligini tekshiring va qayta urinib ko'ring.`
         );
       }
     });
@@ -1035,6 +1125,74 @@ function setupBotHandlers(clientBot, botRecord) {
       );
     });
 
+    // 🎵 Direct Telegram MP3 Audio sender
+    async function sendMusicTrack(ctx, query, displayTitle, displayArtist) {
+      const waitMsg = await ctx.reply(`🎵 <i>"${displayTitle || query}" 320kbps formatda qidirilmoqda va yuklanmoqda... Iltimos, kuting...</i>`, { parse_mode: 'HTML' });
+      const audioData = await getAudioForQuery(query);
+
+      if (audioData && audioData.audioUrl) {
+        const artistName = displayArtist || audioData.performer;
+        const songName = displayTitle || audioData.title;
+        const caption =
+`🎧 <b>${escapeHtml(artistName)} — ${escapeHtml(songName)}</b>\n\n` +
+`⚡ <b>Sifati:</b> 320 kbps (HQ Audio Studio Master)\n` +
+`✨ <b>Format:</b> MP3 Audio\n\n` +
+`📥 <i>@${botRecord.botUsername || 'MusiqaBoti'} orqali to'g'ridan-to'g'ri Telegramga yuklandi!</i>`;
+
+        let sent = false;
+
+        // 1. URL orqali to'g'ridan-to'g'ri Telegram audio yuborish
+        try {
+          await ctx.replyWithAudio(
+            { url: audioData.audioUrl },
+            {
+              title: songName,
+              performer: artistName,
+              caption,
+              parse_mode: 'HTML'
+            }
+          );
+          sent = true;
+        } catch (e) {
+          console.error('replyWithAudio by URL error, trying buffer:', e.message);
+        }
+
+        // 2. Agar URL to'g'ridan-to'g'ri o'tmasa, fayl buffer orqali yuklab yuborish
+        if (!sent) {
+          try {
+            const aRes = await fetch(audioData.audioUrl, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            });
+            if (aRes.ok) {
+              const aBuf = Buffer.from(await aRes.arrayBuffer());
+              await ctx.replyWithAudio(
+                { source: aBuf, filename: `${songName}.mp3` },
+                {
+                  title: songName,
+                  performer: artistName,
+                  caption,
+                  parse_mode: 'HTML'
+                }
+              );
+              sent = true;
+            }
+          } catch (bufErr) {
+            console.error('Audio buffer send error:', bufErr.message);
+          }
+        }
+
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+        if (sent) return true;
+      }
+
+      try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+      await ctx.replyWithHTML(
+        `⚠️ <b>Qo'shiq topilmadi yoki audio faylni yuklab bo'lmadi.</b>\n\n` +
+        `Iltimos, qo'shiq nomini to'liqroq yozib qaytadan urinib ko'ring (masalan: <b>Xojakbar Ro'zmetov Sev mani</b>).`
+      );
+      return false;
+    }
+
     clientBot.hears('🎲 Tasodifiy Musiqa', async (ctx) => {
       // Pick random artist and random song
       const artistKeys = Object.keys(MUSIC_ARTISTS);
@@ -1042,19 +1200,7 @@ function setupBotHandlers(clientBot, botRecord) {
       const art = MUSIC_ARTISTS[randomArtistKey];
       const randomSong = art.songs[Math.floor(Math.random() * art.songs.length)];
 
-      await ctx.replyWithHTML(
-        `🎲 <b>Siz uchun maxsus tavsiya:</b>\n\n` +
-        `🎵 <b>Ijrochi:</b> ${art.name}\n` +
-        `💿 <b>Nomi:</b> ${randomSong.title}\n` +
-        `✨ <b>Yili:</b> ${randomSong.year}\n` +
-        `⏱ <b>Davomiyligi:</b> ${randomSong.duration}\n` +
-        `⚡ <b>Sifati:</b> 320 kbps (HQ Audio)\n` +
-        `📦 <b>Hajmi:</b> ${randomSong.size}`,
-        Markup.inlineKeyboard([
-          [Markup.button.url('▶️ Qo\'shiqni Tinglash (HQ Player)', `https://www.youtube.com/results?search_query=${encodeURIComponent(art.name + ' ' + randomSong.title)}`)],
-          [Markup.button.callback('❤️ Sevimlilarga saqlash', `fav_${encodeURIComponent(randomSong.title).substring(0, 20)}`)]
-        ])
-      );
+      await sendMusicTrack(ctx, `${art.name} ${randomSong.title}`, randomSong.title, art.name);
     });
 
     clientBot.hears('❤️ Sevimli Treklari', async (ctx) => {
@@ -1063,7 +1209,7 @@ function setupBotHandlers(clientBot, botRecord) {
         `1. 🌟 <b>Xojakbar Ro'zmetov</b> — Sev mani\n` +
         `2. 🌟 <b>Xojakbar Ro'zmetov</b> — Vafodorim\n` +
         `3. 🎤 <b>Jaloliddin Ahmadaliyev</b> — Yulduzim\n\n` +
-        `<i>Istalgan qo'shiq ostidagi '❤️ Sevimlilarga saqlash' tugmasini bosib ro'yxatni kengaytirishingiz mumkin!</i>`,
+        `<i>Istalgan qo'shiq nomini yuborsangiz bot uni to'g'ridan-to'g'ri MP3 audio qilib tashlab beradi!</i>`,
         mainMusicKeyboard
       );
     });
@@ -1085,19 +1231,8 @@ function setupBotHandlers(clientBot, botRecord) {
           const cleanTitle = song.title.toLowerCase();
 
           if (qLower === numMatch || qLower === cleanTitle || qLower.includes(cleanTitle)) {
-            return ctx.replyWithHTML(
-              `🎵 <b>${artist.name} — ${song.title}</b>\n\n` +
-              `✨ <b>Yili:</b> ${song.year}\n` +
-              `⏱ <b>Davomiyligi:</b> ${song.duration}\n` +
-              `⚡ <b>Sifati:</b> 320 kbps (HQ Audio Studio Master)\n` +
-              `📦 <b>Hajmi:</b> ${song.size}\n` +
-              `💿 <b>Janr:</b> ${artist.genre}\n\n` +
-              `🎧 <i>Qo'shiq muvaffaqiyatli tayyorlandi! Quyidagi tugma orqali tinglang:</i>`,
-              Markup.inlineKeyboard([
-                [Markup.button.url('▶️ Onlayn Tinglash (HQ Player)', `https://www.youtube.com/results?search_query=${encodeURIComponent(artist.name + ' ' + song.title)}`)],
-                [Markup.button.callback('❤️ Sevimlilarga saqlash', `fav_${encodeURIComponent(song.title).substring(0, 20)}`)]
-              ])
-            );
+            await sendMusicTrack(ctx, `${artist.name} ${song.title}`, song.title, artist.name);
+            return;
           }
         }
       }
@@ -1110,18 +1245,8 @@ function setupBotHandlers(clientBot, botRecord) {
         );
       }
 
-      // Live search fallback for any song title or performer
-      await ctx.replyWithHTML(
-        `🔍 <b>"${escapeHtml(q)}" bo'yicha qidiruv natijalari:</b>\n\n` +
-        `1. 🎵 <b>${escapeHtml(q)}</b> — Original Version (03:42)\n` +
-        `2. 🎵 <b>${escapeHtml(q)}</b> — Remix 2026 (04:15)\n` +
-        `3. 🎵 <b>${escapeHtml(q)}</b> — Acoustic Slow (03:10)\n\n` +
-        `⚡ <i>320 kbps eng yuqori sifatda tayyorlandi! Tinglash uchun tugmani bosing:</i>`,
-        Markup.inlineKeyboard([
-          [Markup.button.url(`▶️ "${q}" Tinglash (HQ)`, `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`)],
-          [Markup.button.callback('❤️ Sevimlilarga saqlash', `fav_${encodeURIComponent(q).substring(0, 15)}`)]
-        ])
-      );
+      // Live search and audio download for any user query (No YouTube links, direct MP3!)
+      await sendMusicTrack(ctx, q, q, 'Ijrochi');
     });
   }
 
