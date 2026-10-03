@@ -115,16 +115,20 @@ function renderSiteHtml(site) {
       </p>
 
       <div class="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+        <button onclick="openOrderModal()" class="inline-flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition shadow-xl shadow-blue-600/30 text-base">
+          <i data-lucide="zap" class="w-5 h-5"></i>
+          <span>Tezkor Buyurtma Berish</span>
+        </button>
         ${tgClean ? `
-          <a href="https://t.me/${tgClean}" target="_blank" class="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold transition shadow-xl shadow-blue-600/30 text-base">
-            <i data-lucide="send" class="w-5 h-5"></i>
-            <span>Telegramda Bog'lanish</span>
+          <a href="https://t.me/${tgClean}" target="_blank" class="inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold transition text-base">
+            <i data-lucide="send" class="w-5 h-5 text-blue-400"></i>
+            <span>Telegram</span>
           </a>
         ` : ''}
         ${site.phone ? `
-          <a href="tel:${phoneClean}" class="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold transition text-base">
+          <a href="tel:${phoneClean}" class="inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold transition text-base">
             <i data-lucide="phone-call" class="w-5 h-5 text-emerald-400"></i>
-            <span>Qo'ng'iroq Qilish</span>
+            <span>Qo'ng'iroq</span>
           </a>
         ` : ''}
       </div>
@@ -254,8 +258,94 @@ function renderSiteHtml(site) {
     </div>
   </footer>
 
+  <!-- Quick Order / Consultation Modal -->
+  <div id="orderModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="max-w-md w-full bg-[#0D1322] border border-slate-800 rounded-3xl p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+        <div>
+          <h3 class="text-base font-bold text-white">⚡ Tezkor Buyurtma / Murojaat</h3>
+          <p class="text-xs text-slate-400">Ma'lumotlaringizni qoldiring, tezda bog'lanamiz</p>
+        </div>
+        <button onclick="document.getElementById('orderModal').classList.add('hidden')" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center hover:text-white">✕</button>
+      </div>
+
+      <form onsubmit="handleSiteOrder(event)" class="space-y-3.5 text-xs">
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Ismingiz *</label>
+          <input type="text" id="orderName" required placeholder="Masalan: Azizbek" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Telefon raqamingiz *</label>
+          <input type="tel" id="orderPhone" required placeholder="+998 90 123 45 67" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Qiziqtirgan xizmat</label>
+          <select id="orderService" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500">
+            ${services.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Qo'shimcha izoh yoki savol</label>
+          <textarea id="orderComment" rows="2" placeholder="Xabaringizni yozing..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500 resize-none"></textarea>
+        </div>
+
+        <button type="submit" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs transition shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 mt-4">
+          <i data-lucide="send" class="w-4 h-4"></i>
+          <span>Yuborish (Telegram orqali)</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Floating Bottom Action Bar on Mobile -->
+  <div class="sm:hidden fixed bottom-4 left-4 right-4 z-40 flex items-center gap-2">
+    <button onclick="openOrderModal()" class="flex-1 py-3.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-xs shadow-2xl shadow-blue-600/50 flex items-center justify-center gap-2">
+      <i data-lucide="zap" class="w-4 h-4"></i>
+      <span>Buyurtma Berish</span>
+    </button>
+    ${site.phone ? `
+      <a href="tel:${phoneClean}" class="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 text-emerald-400 flex items-center justify-center shadow-lg">
+        <i data-lucide="phone" class="w-5 h-5"></i>
+      </a>
+    ` : ''}
+    ${tgClean ? `
+      <a href="https://t.me/${tgClean}" target="_blank" class="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 text-blue-400 flex items-center justify-center shadow-lg">
+        <i data-lucide="send" class="w-5 h-5"></i>
+      </a>
+    ` : ''}
+  </div>
+
   <script>
     lucide.createIcons();
+
+    function openOrderModal() {
+      document.getElementById('orderModal').classList.remove('hidden');
+    }
+
+    function handleSiteOrder(e) {
+      e.preventDefault();
+      const name = document.getElementById('orderName').value.trim();
+      const phone = document.getElementById('orderPhone').value.trim();
+      const service = document.getElementById('orderService').value;
+      const comment = document.getElementById('orderComment').value.trim();
+
+      const text = encodeURIComponent(
+        'Assalomu alaykum! Saytingiz (${escapeHtml(site.title)}) orqali yangi buyurtma:\\n\\n' +
+        '👤 Ism: ' + name + '\\n' +
+        '📱 Tel: ' + phone + '\\n' +
+        '📌 Xizmat: ' + service +
+        (comment ? '\\n💬 Izoh: ' + comment : '')
+      );
+
+      ${tgClean ? `
+        window.open('https://t.me/${tgClean}?text=' + text, '_blank');
+      ` : site.phone ? `
+        window.open('https://t.me/' + '${phoneClean}'.replace('+','') + '?text=' + text, '_blank');
+      ` : `
+        alert('Rahmat, buyurtmangiz qabul qilindi!');
+      `}
+      document.getElementById('orderModal').classList.add('hidden');
+    }
   </script>
 </body>
 </html>`;

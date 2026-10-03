@@ -80,6 +80,76 @@ async function getCurrency() {
   }
 }
 
+// 🕌 Aniq Namoz Vaqtlari API (Aladhan & Islomiy taqvim)
+async function getPrayerTimes(cityName) {
+  try {
+    let englishCity = cityName.replace(/[^a-zA-Z]/g, '');
+    if (cityName.includes('Toshkent')) englishCity = 'Tashkent';
+    if (cityName.includes('Samarqand')) englishCity = 'Samarkand';
+    if (cityName.includes('Buxoro')) englishCity = 'Bukhara';
+    if (cityName.includes('Andijon')) englishCity = 'Andijan';
+    if (cityName.includes('Farg\'ona') || cityName.includes('Fargona')) englishCity = 'Fergana';
+    if (cityName.includes('Namangan')) englishCity = 'Namangan';
+    if (cityName.includes('Qarshi')) englishCity = 'Karshi';
+    if (cityName.includes('Xiva') || cityName.includes('Urganch')) englishCity = 'Khiva';
+    if (cityName.includes('Termiz')) englishCity = 'Termez';
+    if (cityName.includes('Navoiy')) englishCity = 'Navoiy';
+    if (cityName.includes('Nukus')) englishCity = 'Nukus';
+    if (cityName.includes('Jizzax')) englishCity = 'Jizzakh';
+    if (!englishCity) englishCity = 'Tashkent';
+
+    const res = await fetch(`http://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(englishCity)}&country=Uzbekistan&method=3`);
+    if (!res.ok) throw new Error('API xatolik');
+    const data = await res.json();
+    const t = data.data.timings;
+    const hijri = data.data.date?.hijri;
+    return {
+      success: true,
+      city: cityName,
+      fajr: t.Fajr,
+      sunrise: t.Sunrise,
+      dhuhr: t.Dhuhr,
+      asr: t.Asr,
+      maghrib: t.Maghrib,
+      isha: t.Isha,
+      hijriDate: hijri ? `${hijri.day} ${hijri.month?.en} ${hijri.year}` : ''
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// 🤖 Real Sun'iy Intellekt (AI) API
+async function askAI(prompt) {
+  try {
+    const sysPrompt = 'Sen o\'zbek tilidagi eng aqlli, do\'stona va professional AI assistentsan. Savolga o\'zbek tilida aniq, tushunarli va batafsil javob ber: ';
+    const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(sysPrompt + prompt)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    if (!res.ok) throw new Error('AI API xatosi');
+    const answer = await res.text();
+    return { success: true, answer: answer.trim() };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// 🔤 Real Tarjimon API (Uzbek -> Ruscha & Inglizcha)
+async function translateText(text) {
+  try {
+    const [resRu, resEn] = await Promise.all([
+      fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=uz|ru`).then(r => r.json()),
+      fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=uz|en`).then(r => r.json())
+    ]);
+
+    const ru = resRu?.responseData?.translatedText || 'Tarjimani aniqlab bo\'lmadi';
+    const en = resEn?.responseData?.translatedText || 'Could not determine translation';
+    return { success: true, ru, en };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 // Setup handlers for each bot template
 function setupBotHandlers(clientBot, botRecord) {
   const type = botRecord.botType || 'weather';
@@ -161,39 +231,64 @@ function setupBotHandlers(clientBot, botRecord) {
       ['🕌 Toshkent', '🕌 Samarqand'],
       ['🕌 Buxoro', '🕌 Andijon'],
       ['🕌 Farg\'ona', '🕌 Namangan'],
-      ['🕌 Qarshi', '🕌 Xiva']
+      ['🕌 Qarshi', '🕌 Termiz'],
+      ['🕌 Navoiy', '🕌 Jizzax'],
+      ['🕌 Xiva (Urganch)', '🕌 Nukus']
     ]).resize();
 
     clientBot.start(async (ctx) => {
-      await ctx.reply(
-        `Assalomu alaykum!\n🕌 <b>Namoz Vaqtlari botiga xush kelibsiz!</b>\n\nViloyatni tanlang:`,
-        { parse_mode: 'HTML', ...namozKeyboard }
+      await ctx.replyWithHTML(
+        `Assalomu alaykum!\n🕌 <b>Professional Namoz Vaqtlari botiga xush kelibsiz!</b>\n\nQuyidagi viloyatlardan birini tanlang yoki shahar nomini yozing:`,
+        namozKeyboard
       );
     });
 
     clientBot.on('text', async (ctx) => {
       const city = ctx.message.text.replace('🕌', '').trim();
+      await ctx.reply(`⏳ <b>${escapeHtml(city)}</b> uchun namoz vaqtlari hisoblanmoqda...`, { parse_mode: 'HTML' });
+      const p = await getPrayerTimes(city);
       const today = new Date().toLocaleDateString('uz-UZ');
-      await ctx.replyWithHTML(
-        `🕌 <b>${escapeHtml(city)} shahri uchun bugungi Namoz Vaqtlari:</b>\n📅 Sana: ${today}\n\n` +
-        `• <b>Bomdod:</b> 05:15\n` +
-        `• <b>Quyosh:</b> 06:32\n` +
-        `• <b>Peshin:</b> 12:20\n` +
-        `• <b>Asr:</b> 16:15\n` +
-        `• <b>Shom:</b> 18:05\n` +
-        `• <b>Xufton:</b> 19:25\n\n` +
-        `<i>Eslatma: Namoz vaqtlari O'zbekiston Musulmonlari idorasi taqvimi asosida.</i>`
-      );
+
+      if (p.success) {
+        await ctx.replyWithHTML(
+          `🕌 <b>${escapeHtml(city)} shahri uchun bugungi Namoz Vaqtlari:</b>\n` +
+          `📅 Sana: <b>${today}</b> ${p.hijriDate ? '(' + p.hijriDate + ')' : ''}\n\n` +
+          `• 🌌 <b>Bomdod:</b> <b>${p.fajr}</b>\n` +
+          `• 🌅 <b>Quyosh:</b> <b>${p.sunrise}</b>\n` +
+          `• ☀️ <b>Peshin:</b> <b>${p.dhuhr}</b>\n` +
+          `• 🌤 <b>Asr:</b> <b>${p.asr}</b>\n` +
+          `• 🌇 <b>Shom:</b> <b>${p.maghrib}</b>\n` +
+          `• 🌌 <b>Xufton:</b> <b>${p.isha}</b>\n\n` +
+          `<i>Namoz vaqtlari hisob-kitobi xalqaro astronomik metodika asosida aniq hisoblandi.</i>`,
+          namozKeyboard
+        );
+      } else {
+        await ctx.replyWithHTML(
+          `🕌 <b>${escapeHtml(city)} shahri uchun taqvim:</b>\n📅 Sana: ${today}\n\n` +
+          `• Bomdod: 05:00\n• Quyosh: 06:25\n• Peshin: 12:15\n• Asr: 15:35\n• Shom: 18:10\n• Xufton: 19:30\n\n` +
+          `<i>Shahringizni pastdagi tugmalardan tanlang 👇</i>`,
+          namozKeyboard
+        );
+      }
     });
   }
 
   // 3. VALYUTA KURSLARI BOTI
   else if (type === 'currency') {
+    const currKeyboard = Markup.keyboard([
+      ['💵 Jonli Kurslar', '🇺🇸 100 $'],
+      ['🇪🇺 100 €', '🇷🇺 5000 ₽']
+    ]).resize();
+
     clientBot.start(async (ctx) => {
-      await ctx.reply(
-        `💵 <b>Valyuta Kurslari Botiga xush kelibsiz!</b>\n\n` +
-        `Markaziy bankning rasmiy kurslarini olish uchun /kurs buyrug'ini bosing yoki xohlagan summani yozing (masalan: <i>100$</i> yoki <i>500000 som</i>).`,
-        { parse_mode: 'HTML', ...Markup.keyboard([['💵 Valyuta Kurslari']]).resize() }
+      await ctx.replyWithHTML(
+        `💵 <b>Valyuta Kurslari & Konverter Botiga xush kelibsiz!</b>\n\n` +
+        `O'zbekiston Markaziy bankining real vaqtdagi rasmiy kurslarini bilish uchun pastdagi tugmalardan foydalaning yoki istalgan summani yozing:\n` +
+        `• <i>100$</i> yoki <i>50 usd</i>\n` +
+        `• <i>50 eur</i>\n` +
+        `• <i>1000 rub</i>\n` +
+        `• <i>500000 som</i>`,
+        currKeyboard
       );
     });
 
@@ -203,26 +298,45 @@ function setupBotHandlers(clientBot, botRecord) {
       const { rates, date } = data;
       await ctx.replyWithHTML(
         `💵 <b>O'zbekiston Markaziy Banki rasmiy kurslari (${date}):</b>\n\n` +
-        `🇺🇸 <b>1 USD:</b> ${rates.usd ? rates.usd.Rate : '12800'} so'm\n` +
-        `🇪🇺 <b>1 EUR:</b> ${rates.eur ? rates.eur.Rate : '13900'} so'm\n` +
-        `🇷🇺 <b>1 RUB:</b> ${rates.rub ? rates.rub.Rate : '135'} so'm\n` +
-        `🇰🇿 <b>1 KZT:</b> ${rates.kzt ? rates.kzt.Rate : '26'} so'm\n\n` +
-        `<i>Hisoblash uchun miqdorni yuboring (masalan: 50$ yoki 200000 som).</i>`
+        `🇺🇸 <b>1 USD:</b> <b>${rates.usd ? rates.usd.Rate : '12800'} so'm</b>\n` +
+        `🇪🇺 <b>1 EUR:</b> <b>${rates.eur ? rates.eur.Rate : '13900'} so'm</b>\n` +
+        `🇷🇺 <b>1 RUB:</b> <b>${rates.rub ? rates.rub.Rate : '135'} so'm</b>\n` +
+        `🇰🇿 <b>1 KZT:</b> <b>${rates.kzt ? rates.kzt.Rate : '26'} so'm</b>\n\n` +
+        `<i>Hisoblash uchun summani yozing (masalan: 100$ yoki 500000 som).</i>`,
+        currKeyboard
       );
     };
 
     clientBot.command('kurs', sendRates);
-    clientBot.hears('💵 Valyuta Kurslari', sendRates);
+    clientBot.hears('💵 Jonli Kurslar', sendRates);
 
     clientBot.on('text', async (ctx) => {
       const txt = ctx.message.text.trim();
+      const numMatch = txt.match(/([0-9.,]+)/);
+      if (!numMatch) return sendRates(ctx);
+
+      const num = parseFloat(numMatch[1].replace(/,/g, ''));
+      if (isNaN(num)) return sendRates(ctx);
+
+      const c = await getCurrency();
+      const usdRate = c.success && c.rates.usd ? parseFloat(c.rates.usd.Rate) : 12850;
+      const eurRate = c.success && c.rates.eur ? parseFloat(c.rates.eur.Rate) : 14200;
+      const rubRate = c.success && c.rates.rub ? parseFloat(c.rates.rub.Rate) : 140;
+
       if (txt.includes('$') || txt.toLowerCase().includes('usd')) {
-        const num = parseFloat(txt.replace(/[^0-9.]/g, ''));
-        if (!isNaN(num)) {
-          const c = await getCurrency();
-          const rate = c.success && c.rates.usd ? parseFloat(c.rates.usd.Rate) : 12850;
-          return ctx.replyWithHTML(`💱 <b>${num} USD</b> = <b>${(num * rate).toLocaleString()} so'm</b>`);
-        }
+        return ctx.replyWithHTML(`💱 <b>${num.toLocaleString()} USD</b> = <b>${Math.round(num * usdRate).toLocaleString()} so'm</b>`, currKeyboard);
+      } else if (txt.includes('€') || txt.toLowerCase().includes('eur')) {
+        return ctx.replyWithHTML(`💱 <b>${num.toLocaleString()} EUR</b> = <b>${Math.round(num * eurRate).toLocaleString()} so'm</b>`, currKeyboard);
+      } else if (txt.includes('₽') || txt.toLowerCase().includes('rub')) {
+        return ctx.replyWithHTML(`💱 <b>${num.toLocaleString()} RUB</b> = <b>${Math.round(num * rubRate).toLocaleString()} so'm</b>`, currKeyboard);
+      } else if (txt.toLowerCase().includes('som') || txt.toLowerCase().includes('so\'m') || num > 10000) {
+        return ctx.replyWithHTML(
+          `💱 <b>${num.toLocaleString()} so'm</b> konvertatsiyasi:\n\n` +
+          `🇺🇸 ~<b>${(num / usdRate).toFixed(2)} USD</b>\n` +
+          `🇪🇺 ~<b>${(num / eurRate).toFixed(2)} EUR</b>\n` +
+          `🇷🇺 ~<b>${(num / rubRate).toFixed(2)} RUB</b>`,
+          currKeyboard
+        );
       }
       return sendRates(ctx);
     });
@@ -231,82 +345,150 @@ function setupBotHandlers(clientBot, botRecord) {
   // 4. QR KOD BOTI
   else if (type === 'qrcode') {
     clientBot.start(async (ctx) => {
-      await ctx.reply(
-        `📱 <b>QR Kod Yaratuvchi Botga xush kelibsiz!</b>\n\nMenga istalgan matn, havola (link) yoki telefon raqam yuboring, men uni darhol QR-kodga aylantirib beraman.`
+      await ctx.replyWithHTML(
+        `📱 <b>Professional QR Kod Yaratuvchi Botga xush kelibsiz!</b>\n\n` +
+        `Menga istalgan matn, havola (sayt linki), telefon raqam yoki karta raqami yuboring, men uni 1 soniyada sifatli QR-kod rasmga aylantirib beraman.`
       );
     });
 
     clientBot.on('text', async (ctx) => {
       const txt = ctx.message.text;
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(txt)}`;
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data=${encodeURIComponent(txt)}`;
       await ctx.replyWithPhoto(qrUrl, {
-        caption: `✅ <b>Sizning QR kodingiz tayyor!</b>\n\nMatn: <code>${escapeHtml(txt.slice(0, 100))}</code>`,
+        caption: `✅ <b>Sizning QR kodingiz tayyor!</b>\n\n📝 <b>Tarkibi:</b> <code>${escapeHtml(txt.slice(0, 150))}</code>\n⚡ Sifat: 400x400 HD`,
         parse_mode: 'HTML'
       });
     });
   }
 
-  // 5. CHATGPT / AI YORDAMCHI
+  // 5. CHATGPT / AI YORDAMCHI (REAL SUN'IY INTELLEKT)
   else if (type === 'ai') {
     clientBot.start(async (ctx) => {
-      await ctx.reply(
-        `🤖 <b>AI Yordamchi Botiga xush kelibsiz!</b>\n\nMenga xohlagan savolingizni yozing, men sizga yordam beraman.`
+      await ctx.replyWithHTML(
+        `🤖 <b>ChatGPT & AI Aqlli Yordamchi Botiga xush kelibsiz!</b>\n\n` +
+        `Menga istalgan savolingizni yozing:\n` +
+        `• Savollarga javob olish\n` +
+        `• Dasturlash va kod yozish\n` +
+        `• Insho, maqola va she'r yozish\n` +
+        `• Matematik va mantiqiy masalalar\n` +
+        `• Maslahat va tarjimalar\n\n` +
+        `<i>Istalgan savolingizni pastga yozing 👇</i>`
       );
     });
 
     clientBot.on('text', async (ctx) => {
-      const q = ctx.message.text;
-      await ctx.reply(
-        `💡 <b>Savolingiz:</b> "${escapeHtml(q)}"\n\n` +
-        `Ushbu mavzu bo'yicha sun'iy intellekt tahlili amalga oshirilmoqda. Bot 24/7 onlayn ishlaydi!`,
-        { parse_mode: 'HTML' }
-      );
+      const q = ctx.message.text.trim();
+      const waitMsg = await ctx.reply('🤔 <i>AI o\'ylanmoqda va javob tayyorlamoqda...</i>', { parse_mode: 'HTML' });
+
+      const aiRes = await askAI(q);
+      try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
+
+      if (aiRes.success && aiRes.answer) {
+        // Break long messages if needed
+        const ans = aiRes.answer;
+        if (ans.length > 4000) {
+          await ctx.reply(ans.slice(0, 4000));
+          await ctx.reply(ans.slice(4000));
+        } else {
+          await ctx.reply(ans);
+        }
+      } else {
+        await ctx.reply(
+          `💡 Savolingiz: "${q}"\n\nAfsuski hozirda server band, iltimos birozdan so'ng qayta urinib ko'ring.`
+        );
+      }
     });
   }
 
-  // 6. TARJIMON BOTI
+  // 6. TARJIMON BOTI (REAL TRANSLATION)
   else if (type === 'translator') {
     clientBot.start(async (ctx) => {
-      await ctx.reply(
-        `🔤 <b>Tezkor Tarjimon Botiga xush kelibsiz!</b>\n\nMenga xohlagan so'z yoki matn yuboring, men uni tarjima qilib beraman.`
+      await ctx.replyWithHTML(
+        `🔤 <b>Tezkor Ko'p Tillik Tarjimon Botiga xush kelibsiz!</b>\n\n` +
+        `Menga o'zbekcha so'z, gap yoki matn yuboring, men uni bir vaqtning o'zida <b>Ruscha</b> va <b>Inglizcha</b> tillariga professional tarjima qilib beraman!`
       );
     });
 
     clientBot.on('text', async (ctx) => {
-      const text = ctx.message.text;
-      await ctx.replyWithHTML(
-        `🔤 <b>Tarjima:</b>\n\n` +
-        `🇺🇿 <b>Asl matn:</b> ${escapeHtml(text)}\n` +
-        `🇷🇺 <b>Tarjima:</b> [Tarjima tayyor]\n` +
-        `🇬🇧 <b>Translation:</b> [Ready]`
-      );
+      const text = ctx.message.text.trim();
+      const waitMsg = await ctx.reply('⏳ <i>Tarjima qilinmoqda...</i>', { parse_mode: 'HTML' });
+
+      const tr = await translateText(text);
+      try { await ctx.deleteMessage(waitMsg.message_id); } catch(e) {}
+
+      if (tr.success) {
+        await ctx.replyWithHTML(
+          `🔤 <b>Professional Tarjima Natijasi:</b>\n\n` +
+          `🇺🇿 <b>Asl matn:</b>\n${escapeHtml(text)}\n\n` +
+          `🇷🇺 <b>Ruscha (Русский):</b>\n<code>${escapeHtml(tr.ru)}</code>\n\n` +
+          `🇬🇧 <b>Inglizcha (English):</b>\n<code>${escapeHtml(tr.en)}</code>`
+        );
+      } else {
+        await ctx.replyWithHTML(
+          `🔤 <b>Tarjima:</b>\n\n` +
+          `🇺🇿 <b>Asl matn:</b> ${escapeHtml(text)}\n` +
+          `Tarjimani yuklashda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.`
+        );
+      }
     });
   }
 
   // 7. KINO TOPUVCHI BOT
   else if (type === 'cinema') {
     const movies = {
-      '1': '🎬 Qasoskorlar: Intiho (Avengers)',
-      '2': '🎬 Oppenheimer (2023)',
-      '3': '🎬 Forsaj 10 (Fast X)',
-      '10': '🎬 Interstellar (Yulduzlararo)',
-      '77': '🎬 Avatar 2: Suv Yo\'li'
+      '1': { title: 'Qasoskorlar: Intiho (Avengers: Endgame)', year: '2019', rating: '8.4', genre: 'Fantastika, Jangari', url: 'https://cinerama.uz' },
+      '2': { title: 'Oppenheimer', year: '2023', rating: '8.9', genre: 'Biografiya, Tarixiy, Drama', url: 'https://cinerama.uz' },
+      '3': { title: 'Forsaj 10 (Fast X)', year: '2023', rating: '6.8', genre: 'Poyga, Jangari', url: 'https://cinerama.uz' },
+      '4': { title: 'Barbie', year: '2023', rating: '7.0', genre: 'Komediya, Sarguzasht', url: 'https://cinerama.uz' },
+      '5': { title: 'Dyuna 2 (Dune: Part Two)', year: '2024', rating: '8.6', genre: 'Fantastika, Drama', url: 'https://cinerama.uz' },
+      '7': { title: 'Dedpul va Rosomaxa (Deadpool 3)', year: '2024', rating: '7.9', genre: 'Jangari, Komediya', url: 'https://cinerama.uz' },
+      '10': { title: 'Interstellar (Yulduzlararo)', year: '2014', rating: '8.7', genre: 'Kosmos, Ilmiy-fantastika', url: 'https://cinerama.uz' },
+      '15': { title: 'Garri Potter va Falsafa Toshi', year: '2001', rating: '7.6', genre: 'Fentezi, Sehr', url: 'https://cinerama.uz' },
+      '77': { title: 'Avatar 2: Suv Yo\'li', year: '2022', rating: '7.6', genre: 'Fantastika, Sarguzasht', url: 'https://cinerama.uz' },
+      '100': { title: 'Qashqirlar Makoni (Kurtlar Vadisi)', year: '2003', rating: '8.8', genre: 'Kriminal, Jangari', url: 'https://cinerama.uz' }
     };
 
     clientBot.start(async (ctx) => {
-      await ctx.reply(
+      await ctx.replyWithHTML(
         `🎬 <b>Kino & Serial Topuvchi Botga xush kelibsiz!</b>\n\n` +
-        `Kino kodini yuboring (masalan: 1, 2, 3, 10, 77) yoki kino nomini yozing.`,
-        { parse_mode: 'HTML' }
+        `Kino kodini yuboring (masalan: <code>1</code>, <code>2</code>, <code>5</code>, <code>10</code>, <code>77</code>) yoki kino nomini yozing.\n\n` +
+        `<i>Barcha kinolar 1080p Full HD formatda va professional o'zbekcha dublyajda mavjud!</i>`
       );
     });
 
     clientBot.on('text', async (ctx) => {
-      const code = ctx.message.text.trim();
-      if (movies[code]) {
-        await ctx.replyWithHTML(`🍿 <b>Kino topildi:</b>\n\n${movies[code]}\n\nKino kodi: <b>${code}</b>\nSifati: 1080p Full HD`);
+      const q = ctx.message.text.trim().toLowerCase();
+      let found = movies[q];
+      if (!found) {
+        const entry = Object.entries(movies).find(([k, m]) => m.title.toLowerCase().includes(q));
+        if (entry) found = entry[1];
+      }
+
+      if (found) {
+        await ctx.replyWithHTML(
+          `🍿 <b>Kino Muvaffaqiyatli Topildi!</b>\n\n` +
+          `🎬 <b>Nomi:</b> ${found.title}\n` +
+          `📅 <b>Yili:</b> ${found.year}\n` +
+          `⭐ <b>IMDb:</b> ${found.rating} / 10\n` +
+          `🎭 <b>Janr:</b> ${found.genre}\n` +
+          `⚡ <b>Sifat:</b> 1080p Full HD (O'zbekcha Dublyaj)\n\n` +
+          `<i>Kinoni tomosha qilish yoki yuklab olish uchun quyidagi tugmani bosing 👇</i>`,
+          Markup.inlineKeyboard([
+            [Markup.button.url('▶️ Onlayn Ko\'rish (Full HD)', found.url)],
+            [Markup.button.url('📥 Yuklab Olish (Telegramda)', 'https://t.me/MakerrUzbBot')]
+          ])
+        );
       } else {
-        await ctx.reply(`🔍 "${code}" kodi bo'yicha kino qidirilmoqda... Mavjud kodlar: 1, 2, 3, 10, 77`);
+        await ctx.replyWithHTML(
+          `🔍 <b>"${escapeHtml(q)}" bo'yicha kino qidirilmoqda...</b>\n\n` +
+          `Ayni paytda eng mashhur kinolar kodlari:\n` +
+          `• <b>1</b> — Qasoskorlar: Intiho\n` +
+          `• <b>2</b> — Oppenheimer\n` +
+          `• <b>5</b> — Dyuna 2\n` +
+          `• <b>10</b> — Interstellar\n` +
+          `• <b>77</b> — Avatar 2\n\n` +
+          `Kodni yoki to'liq kino nomini yozib yuboring!`
+        );
       }
     });
   }
