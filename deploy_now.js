@@ -22,8 +22,8 @@ async function checkAndDeploy() {
       }
     });
 
-    // Let's trigger deploy for srv-dadec4u7bikc73btdjm0
-    const dep = await render.post('/services/srv-dadec4u7bikc73btdjm0/deploys', {
+    // Let's trigger deploy for srv-dan88k2jnfac73fnkqdg (telegram-bot-maker-live)
+    const dep = await render.post('/services/srv-dan88k2jnfac73fnkqdg/deploys', {
       clearCache: 'clear'
     });
     console.log('RENDER_DEPLOY_TRIGGERED:', dep.data.id, dep.data.status);
