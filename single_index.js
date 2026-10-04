@@ -103,7 +103,7 @@ module.exports = {
       price: 150000,
       days: 365,
       maxBots: 50,
-      description: '1 yil davomida barcha 16 ta bot shablonlaridan 50 tagacha bot'
+      description: '1 yil davomida barcha 15 ta bot shablonlaridan 50 tagacha bot'
     },
     unlimited_forever: {
       id: 'unlimited_forever',

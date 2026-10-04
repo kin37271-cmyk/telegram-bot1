@@ -43,16 +43,16 @@ function getMainMenuKeyboard(userId) {
   return Markup.keyboard(rows).resize();
 }
 
-// 2. 16 ta Bot Yo'nalishlari Tugmalari (Reply Keyboard)
+// 2. 15 ta Bot Yo'nalishlari Tugmalari (Reply Keyboard)
 const botTypesKeyboard = Markup.keyboard([
   ['🌦 Ob-havo Boti', '🕌 Namoz Vaqtlari'],
   ['💵 Valyuta Kurslari', '📱 QR Kod Boti'],
   ['🤖 ChatGPT / AI Boti', '🔤 Tarjimon Boti'],
   ['🎬 Kino Topuvchi', '📢 Kanal & Avto-Post'],
-  ['🎭 Anonim Chat Boti', '📥 Video Yuklovchi'],
-  ['🎵 Musiqa Qidiruvchi', '🔮 Munajjimlar'],
-  ['🧠 Viktorina & Test', '📝 Bloknot & Qaydlar'],
-  ['🧮 Aqlli Kalkulyator', '📨 Taklif & Murojaat'],
+  ['🎭 Anonim Chat Boti', '🎵 Musiqa Qidiruvchi'],
+  ['🔮 Munajjimlar', '🧠 Viktorina & Test'],
+  ['📝 Bloknot & Qaydlar', '🧮 Aqlli Kalkulyator'],
+  ['📨 Taklif & Murojaat'],
   ['⬅️ Asosiy Menyu']
 ]).resize();
 
@@ -123,7 +123,7 @@ bot.command('start', async (ctx) => {
   const welcomePost = 
 `🌟 <b>Assalomu alaykum, ${escapeHtml(name)}!</b>
 
-🤖 <b>MAKER BOT PLATFORMASI (16-IN-1 BOT KONSTRUKTOR)</b>
+🤖 <b>MAKER BOT PLATFORMASI (15-IN-1 BOT KONSTRUKTOR)</b>
 
 Bu yerda siz hech qanday dasturlashsiz, to'g'ridan-to'g'ri o'z <b>shaxsiy Telegram botlaringizni</b> 1 daqiqada yaratishingiz mumkin!
 Barcha botlar bizning serverimizda <b>24/7 avtomatik hostingda</b> uzluksiz ishlaydi.
@@ -144,7 +144,7 @@ Barcha botlar bizning serverimizda <b>24/7 avtomatik hostingda</b> uzluksiz ishl
   await ctx.replyWithHTML(welcomePost, getMainMenuKeyboard(userId));
 });
 
-// ==================== 16 TA BOT YARATISH BO'LIMI ====================
+// ==================== 15 TA BOT YARATISH BO'LIMI ====================
 bot.hears('🤖 Bot Yaratish', async (ctx) => {
   const userId = ctx.from.id;
   userStates.delete(userId);
@@ -185,7 +185,7 @@ bot.hears('🤖 Bot Yaratish', async (ctx) => {
   userStates.set(userId, { step: 'choose_bot_type' });
 
   const text = 
-`🤖 <b>Qanday turdagi Bot yaratmoqchisiz? (Jami 16 xil Bot):</b>
+`🤖 <b>Qanday turdagi Bot yaratmoqchisiz? (Jami 15 xil Bot):</b>
 
 📊 Sizning botlaringiz: <b>${userBots.length}/${maxBots} ta</b> (${tariffObj.name})
 
@@ -198,20 +198,19 @@ bot.hears('🤖 Bot Yaratish', async (ctx) => {
 7. 🎬 <b>Kino Topuvchi Boti</b> — Kod orqali kinolarni topib beruvchi bot
 8. 📢 <b>Kanal & Avto-Post Boti</b> — Kanallarga chiroyli postlar joylash boti
 9. 🎭 <b>Anonim Chat Boti</b> — Tasodifiy begona bilan suhbat va maxfiy xabarlar
-10. 📥 <b>Video Yuklovchi</b> — Instagram Reels, TikTok (suvsiz) va YouTube
-11. 🎵 <b>Musiqa Qidiruvchi</b> — Nomi va ijrochi bo'yicha 320kbps musiqa topish
-12. 🔮 <b>Munajjimlar Bashorati</b> — 12 burj uchun kunlik to'liq bashorat
-13. 🧠 <b>Viktorina & Test Boti</b> — Intellektual savollar va ball yig'ish o'yini
-14. 📝 <b>Bloknot & Qaydlar Boti</b> — Shaxsiy rejalar va eslatmalar daftari
-15. 🧮 <b>Aqlli Kalkulyator Boti</b> — Matematik amallar, kredit va foiz hisoblash
-16. 📨 <b>Taklif & Murojaat Boti</b> — Mijozlar murojaatlarini qabul qilish boti
+10. 🎵 <b>Musiqa Qidiruvchi</b> — Nomi va ijrochi bo'yicha 320kbps musiqa topish
+11. 🔮 <b>Munajjimlar Bashorati</b> — 12 burj uchun kunlik to'liq bashorat
+12. 🧠 <b>Viktorina & Test Boti</b> — Intellektual savollar va ball yig'ish o'yini
+13. 📝 <b>Bloknot & Qaydlar Boti</b> — Shaxsiy rejalar va eslatmalar daftari
+14. 🧮 <b>Aqlli Kalkulyator Boti</b> — Matematik amallar, kredit va foiz hisoblash
+15. 📨 <b>Taklif & Murojaat Boti</b> — Mijozlar murojaatlarini qabul qilish boti
 
 <i>Kerakli bot yo'nalishini pastdagi klaviaturadan tanlang 👇</i>`;
 
   await ctx.replyWithHTML(text, botTypesKeyboard);
 });
 
-// Bot Turi Tanlanganda (16 ta bot)
+// Bot Turi Tanlanganda (15 ta bot)
 const botTypeMap = {
   '🌦 Ob-havo Boti': { type: 'weather', name: 'Ob-havo Boti' },
   '🕌 Namoz Vaqtlari': { type: 'namoz', name: 'Namoz Vaqtlari Boti' },
@@ -222,7 +221,6 @@ const botTypeMap = {
   '🎬 Kino Topuvchi': { type: 'cinema', name: 'Kino Topuvchi Boti' },
   '📢 Kanal & Avto-Post': { type: 'channel', name: 'Kanal & Avto-Post Boti' },
   '🎭 Anonim Chat Boti': { type: 'anonymous', name: 'Anonim Chat Boti' },
-  '📥 Video Yuklovchi': { type: 'downloader', name: 'Media & Video Yuklovchi' },
   '🎵 Musiqa Qidiruvchi': { type: 'music', name: 'Musiqa Qidiruvchi Bot' },
   '🔮 Munajjimlar': { type: 'horoscope', name: 'Munajjimlar Bashorati Boti' },
   '🧠 Viktorina & Test': { type: 'quiz', name: 'Savol-Javob & Viktorina Boti' },
@@ -459,7 +457,7 @@ Siz botni Telegram orqali yaratsangiz ham Web App da turadi, Web App da yaratsan
 👇 <b>Web App-ni ochish uchun pastdagi tugmani bosing:</b>`;
 
   await ctx.replyWithHTML(text, Markup.inlineKeyboard([
-    [Markup.button.webApp('🚀 Web App-ni Ochish (16 xil Bot & 20 xil Sayt)', webAppUrl)]
+    [Markup.button.webApp('🚀 Web App-ni Ochish (15 xil Bot & 20 xil Sayt)', webAppUrl)]
   ]));
 });
 
@@ -1245,7 +1243,7 @@ async function startBot() {
     await bot.telegram.setChatMenuButton({ menu_button: { type: 'default' } }).catch(() => {});
 
     // Ensure clean bot profile info & official name MAKER BOT
-    const cleanDescription = `🌟 Assalomu alaykum! MAKER BOT platformasiga xush kelibsiz.\n\n🤖 16 xil Telegram bot konstruktori:\n• Ob-havo, Namoz vaqtlari, Valyuta, QR kod\n• ChatGPT / AI, Tarjimon, Kino, Kanal post\n• Anonim chat, Video yuklovchi, Musiqa\n• Munajjimlar, Viktorina, Bloknot, Kalkulyator\n\n⚡️ 24/7 uzluksiz avtomatik hosting!\nBoshlash uchun pastdagi Start tugmasini bosing! 👇`;
+    const cleanDescription = `🌟 Assalomu alaykum! MAKER BOT platformasiga xush kelibsiz.\n\n🤖 15 xil Telegram bot konstruktori:\n• Ob-havo, Namoz vaqtlari, Valyuta, QR kod\n• ChatGPT / AI, Tarjimon, Kino, Kanal post\n• Anonim chat, Musiqa, Munajjimlar\n• Viktorina, Bloknot, Kalkulyator, Taklif\n\n⚡️ 24/7 uzluksiz avtomatik hosting!\nBoshlash uchun pastdagi Start tugmasini bosing! 👇`;
 
     const cleanBio = `🤖 MAKER BOT — Kod yozmasdan Telegram bot yaratish platformasi. O'z botingizni 1 daqiqada ishga tushiring!`;
 

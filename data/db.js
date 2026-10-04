@@ -59,7 +59,7 @@ function getInitialDB() {
         days: 30,
         maxBots: 999,
         maxSites: 999,
-        description: 'Cheksiz botlar va saytlar (999 ta), barcha 16 ta bot turidan foydalanish, VIP yordam.'
+        description: 'Cheksiz botlar va saytlar (999 ta), barcha 15 ta bot turidan foydalanish, VIP yordam.'
       }
     },
     settings: {
