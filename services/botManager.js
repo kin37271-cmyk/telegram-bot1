@@ -415,9 +415,510 @@ const MUSIC_ARTISTS = {
   }
 };
 
+// Map to track client bot admin dialog states: `${botId}_${userId}` -> { step, ... }
+const clientAdminStates = new Map();
+
+// Helper to render owner Admin Panel
+function renderClientAdminPanel(botId, botRecord) {
+  const curBot = db.getBot(botId) || botRecord;
+  const subCount = db.getBotSubscribersCount ? db.getBotSubscribersCount(botId) : 0;
+  const channels = curBot.mandatoryChannels || [];
+  const hasCustomStart = !!curBot.customStartText;
+
+  const text =
+`👑 <b>BOT EGASI BOSHQARUV PANELI (ADMIN PANEL)</b>
+
+🤖 <b>Bot:</b> @${curBot.botUsername || botRecord.botUsername}
+🛠 <b>Turi:</b> ${(curBot.botType || botRecord.botType || '').toUpperCase()}
+
+📊 <b>Hozirgi holat:</b>
+• 👥 <b>Jami obunachilar:</b> <b>${subCount} ta</b>
+• 📢 <b>Majburiy kanallar:</b> <b>${channels.length} ta</b>
+• ✍️ <b>Start xabari:</b> <b>${hasCustomStart ? 'Moslashtirilgan ✅' : 'Standart (shablon)'}</b>
+
+<i>Quyidagi tugmalar orqali botingizni to'liq boshqaring:</i>`;
+
+  const buttons = [
+    [
+      Markup.button.callback('📊 Statistika', 'c_admin_stats'),
+      Markup.button.callback('📢 Xabar Tarqatish', 'c_admin_broadcast')
+    ],
+    [
+      Markup.button.callback('📢 Majburiy Kanallar', 'c_admin_channels'),
+      Markup.button.callback('✍️ Start Matni', 'c_admin_start_text')
+    ],
+    [
+      Markup.button.callback('🔄 Yangilash', 'c_admin_refresh'),
+      Markup.button.callback('🔙 Chiqish', 'c_admin_exit')
+    ]
+  ];
+
+  return { text, keyboard: Markup.inlineKeyboard(buttons) };
+}
+
 // Setup handlers for each bot template
 function setupBotHandlers(clientBot, botRecord) {
+  const botId = botRecord.id;
+  const ownerId = String(botRecord.userId);
   const type = botRecord.botType || 'weather';
+
+  // 1. Obunachini ro'yxatga olish (Automatic subscriber tracking)
+  clientBot.use(async (ctx, next) => {
+    if (ctx.from) {
+      db.addBotSubscriber(botId, {
+        id: ctx.from.id,
+        name: ctx.from.first_name || 'Foydalanuvchi',
+        username: ctx.from.username || ''
+      });
+    }
+    return next();
+  });
+
+  // 2. Majburiy obuna tekshiruvi (oddiy foydalanuvchilar uchun)
+  clientBot.use(async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!userId) return next();
+
+    // Bot egasiga hech qanday cheklov yo'q
+    if (String(userId) === ownerId) {
+      return next();
+    }
+
+    // Callback query tekshiruvi bo'lsa o'tkazamiz
+    if (ctx.callbackQuery && ctx.callbackQuery.data === 'client_check_sub') {
+      return next();
+    }
+
+    const curBot = db.getBot(botId) || botRecord;
+    const channels = curBot.mandatoryChannels || [];
+    if (!channels || channels.length === 0) {
+      return next();
+    }
+
+    let notJoined = [];
+    for (const ch of channels) {
+      try {
+        const member = await ctx.telegram.getChatMember(ch.channelId || ch.username, userId);
+        const okStatuses = ['creator', 'administrator', 'member', 'restricted'];
+        if (!okStatuses.includes(member.status)) {
+          notJoined.push(ch);
+        }
+      } catch (e) {
+        // Agar kanalda bot admin bo'lmasa, user bloklanmaydi
+      }
+    }
+
+    if (notJoined.length > 0) {
+      const buttons = notJoined.map(ch => [
+        Markup.button.url(
+          `📢 ${ch.title || ch.username} kanaliga a'zo bo'lish`,
+          ch.inviteUrl || `https://t.me/${(ch.username || '').replace('@', '')}`
+        )
+      ]);
+      buttons.push([Markup.button.callback('🔄 A\'zolikni tekshirish', 'client_check_sub')]);
+
+      const msg = `⚠️ <b>Botdan to'liq foydalanish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\nA'zo bo'lgach, "🔄 A'zolikni tekshirish" tugmasini bosing!`;
+      return ctx.replyWithHTML(msg, Markup.inlineKeyboard(buttons));
+    }
+
+    return next();
+  });
+
+  // A'zolikni tekshirish callbacki
+  clientBot.action('client_check_sub', async (ctx) => {
+    const userId = ctx.from.id;
+    const curBot = db.getBot(botId) || botRecord;
+    const channels = curBot.mandatoryChannels || [];
+    let notJoined = [];
+
+    for (const ch of channels) {
+      try {
+        const member = await ctx.telegram.getChatMember(ch.channelId || ch.username, userId);
+        const okStatuses = ['creator', 'administrator', 'member', 'restricted'];
+        if (!okStatuses.includes(member.status)) {
+          notJoined.push(ch);
+        }
+      } catch (e) {}
+    }
+
+    if (notJoined.length > 0) {
+      return ctx.answerCbQuery('❌ Siz hali barcha kanallarga a\'zo bo\'lmadingiz!', { show_alert: true });
+    }
+
+    await ctx.answerCbQuery('✅ Rahmat! Kanallarga a\'zoligingiz tasdiqlandi!');
+    try { await ctx.deleteMessage(); } catch (e) {}
+    await ctx.reply('🎉 Tabriklaymiz! Endi botdan to\'liq foydalanishingiz mumkin. /start buyrug\'ini yuboring.');
+  });
+
+  // 3. Bot egasining faol dialog holatlarini ushlash middleware
+  clientBot.use(async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!userId || String(userId) !== ownerId) return next();
+
+    const stateKey = `${botId}_${userId}`;
+    const state = clientAdminStates.get(stateKey);
+    if (!state) return next();
+
+    const text = ctx.message?.text?.trim();
+
+    // Bekor qilish
+    if (text === '/cancel' || text === '❌ Bekor qilish') {
+      clientAdminStates.delete(stateKey);
+      await ctx.reply('Amal bekor qilindi. Boshqaruv menyusiga qaytdingiz.');
+      const panel = renderClientAdminPanel(botId, botRecord);
+      return ctx.replyWithHTML(panel.text, panel.keyboard);
+    }
+
+    // A. Rassilka (Xabar tarqatish)
+    if (state.step === 'awaiting_broadcast') {
+      clientAdminStates.delete(stateKey);
+      const subs = db.getBotSubscribers(botId);
+      if (!subs || subs.length === 0) {
+        return ctx.reply('Botda hali obunachilar mavjud emas.');
+      }
+
+      const waitMsg = await ctx.reply(`⏳ Xabar barcha obunachilarga tarqatilmoqda (Jami: ${subs.length} ta)...`);
+      let sent = 0, failed = 0;
+
+      for (const s of subs) {
+        try {
+          await ctx.copyMessage(s.id);
+          sent++;
+        } catch (e) {
+          failed++;
+        }
+        if (subs.length > 25) {
+          await new Promise(r => setTimeout(r, 40));
+        }
+      }
+
+      try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+      await ctx.replyWithHTML(
+        `✅ <b>XABAR TARQATISH YAKUNLANDI!</b>\n\n` +
+        `👥 <b>Jami obunachilar:</b> ${subs.length} ta\n` +
+        `📤 <b>Muvaffaqiyatli yetkazildi:</b> <b>${sent} ta</b>\n` +
+        `🚫 <b>Yetkazilmadi (bloklaganlar):</b> <b>${failed} ta</b>`
+      );
+      const panel = renderClientAdminPanel(botId, botRecord);
+      return ctx.replyWithHTML(panel.text, panel.keyboard);
+    }
+
+    // B. Majburiy kanal qo'shish
+    if (state.step === 'awaiting_channel') {
+      clientAdminStates.delete(stateKey);
+      let channelInput = (text || '').replace('https://t.me/', '').trim();
+      if (!channelInput.startsWith('@') && !channelInput.startsWith('-100')) {
+        channelInput = '@' + channelInput;
+      }
+
+      const waitMsg = await ctx.reply(`⏳ <b>${escapeHtml(channelInput)}</b> kanali tekshirilmoqda...`, { parse_mode: 'HTML' });
+      try {
+        const chat = await ctx.telegram.getChat(channelInput);
+        const botMe = await ctx.telegram.getMe();
+        let botMember;
+        try {
+          botMember = await ctx.telegram.getChatMember(chat.id, botMe.id);
+        } catch (err) {
+          try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+          return ctx.replyWithHTML(
+            `❌ <b>Botingiz bu kanalda topilmadi!</b>\n\nIltimos, avval botingizni (<b>@${botMe.username}</b>) ushbu kanalga qo'shing va unga <b>Administrator</b> huquqini bering!`,
+            Markup.inlineKeyboard([[Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]])
+          );
+        }
+
+        if (botMember.status !== 'administrator' && botMember.status !== 'creator') {
+          try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+          return ctx.replyWithHTML(
+            `❌ <b>Botingiz kanalda Administrator emas!</b>\n\nBotingiz obunani tekshirishi uchun kanalda admin huquqiga ega bo'lishi shart.`,
+            Markup.inlineKeyboard([[Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]])
+          );
+        }
+
+        db.addMandatoryChannel(botId, {
+          channelId: chat.id,
+          username: chat.username ? `@${chat.username}` : channelInput,
+          title: chat.title || channelInput,
+          inviteUrl: chat.invite_link || (chat.username ? `https://t.me/${chat.username}` : '')
+        });
+
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+        await ctx.replyWithHTML(
+          `🎉 <b>${escapeHtml(chat.title || channelInput)}</b> kanali muvaffaqiyatli qo'shildi!\n\nEndi botdan foydalanuvchilar ushbu kanalga a'zo bo'lishlari shart bo'ladi.`
+        );
+        const panel = renderClientAdminPanel(botId, botRecord);
+        return ctx.replyWithHTML(panel.text, panel.keyboard);
+      } catch (err) {
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+        return ctx.replyWithHTML(
+          `❌ <b>Kanal topilmadi:</b> ${escapeHtml(err.message)}\n\nKanal ommaviy (public) ekanligini yoki to'g'ri yozilganini tekshiring (masalan: <code>@mening_kanalim</code>).`,
+          Markup.inlineKeyboard([[Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]])
+        );
+      }
+    }
+
+    // C. Start matnini o'zgartirish
+    if (state.step === 'awaiting_start_text') {
+      clientAdminStates.delete(stateKey);
+      if (!text) {
+        return ctx.reply('Iltimos, matn yuboring.');
+      }
+      db.updateBotSettings(botId, { customStartText: text });
+      await ctx.replyWithHTML(
+        `✅ <b>Start salomlashish matni muvaffaqiyatli saqlandi!</b>\n\nEndi botingiz yangi a'zolarni aynan shu matn bilan kutib oladi.`
+      );
+      const panel = renderClientAdminPanel(botId, botRecord);
+      return ctx.replyWithHTML(panel.text, panel.keyboard);
+    }
+
+    return next();
+  });
+
+  // 4. Bot egasi /admin buyrug'i
+  clientBot.hears(['/admin', '👑 Admin Panel', 'admin', 'Admin'], async (ctx, next) => {
+    if (String(ctx.from.id) !== ownerId) {
+      return next();
+    }
+    clientAdminStates.delete(`${botId}_${ctx.from.id}`);
+    const panel = renderClientAdminPanel(botId, botRecord);
+    return ctx.replyWithHTML(panel.text, panel.keyboard);
+  });
+
+  // 5. Admin Panel Callbacks
+  clientBot.action('c_admin_refresh', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    const panel = renderClientAdminPanel(botId, botRecord);
+    await ctx.answerCbQuery('Yangilandi 🔄');
+    try {
+      await ctx.editMessageText(panel.text, { parse_mode: 'HTML', ...panel.keyboard });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_admin_back', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    clientAdminStates.delete(`${botId}_${ctx.from.id}`);
+    const panel = renderClientAdminPanel(botId, botRecord);
+    await ctx.answerCbQuery();
+    try {
+      await ctx.editMessageText(panel.text, { parse_mode: 'HTML', ...panel.keyboard });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_admin_exit', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    clientAdminStates.delete(`${botId}_${ctx.from.id}`);
+    await ctx.answerCbQuery('Chiqildi');
+    try { await ctx.deleteMessage(); } catch (e) {}
+    await ctx.reply('Foydalanuvchi rejimiga qaytdingiz. /start orqali botdan foydalanishingiz mumkin.');
+  });
+
+  clientBot.action('c_admin_stats', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    const subs = db.getBotSubscribers(botId);
+    const curBot = db.getBot(botId) || botRecord;
+    const channels = curBot.mandatoryChannels || [];
+    const recent = subs.slice(-7).reverse();
+
+    let text =
+`📊 <b>BOT STATISTIKASI VA FOYDALANUVCHILAR</b>
+
+🤖 <b>Bot:</b> @${curBot.botUsername || botRecord.botUsername}
+👥 <b>Jami obunachilar:</b> <b>${subs.length} ta</b>
+📢 <b>Majburiy kanallar:</b> <b>${channels.length} ta</b>
+⚡ <b>Holati:</b> 24/7 Avto Hostingda Onlayn 🟢
+
+`;
+    if (recent.length > 0) {
+      text += `🕒 <b>So'nggi qo'shilganlar:</b>\n`;
+      recent.forEach((u, i) => {
+        const uName = escapeHtml(u.name || 'User');
+        const uLink = u.username ? `@${u.username}` : `<code>${u.id}</code>`;
+        text += `${i + 1}. ${uName} (${uLink})\n`;
+      });
+    } else {
+      text += `<i>Hozircha obunachilar yo'q. Bot havolasini ulashing!</i>`;
+    }
+
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.callback('🔄 Yangilash', 'c_admin_stats')],
+      [Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]
+    ]);
+
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', ...kb });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_admin_broadcast', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    const subs = db.getBotSubscribers(botId);
+    clientAdminStates.set(`${botId}_${ctx.from.id}`, { step: 'awaiting_broadcast' });
+
+    const text =
+`📢 <b>HAMMAGA XABAR YUBORISH (RASSILKA)</b>
+
+📊 Botingizdagi obunachilar: <b>${subs.length} ta</b>
+
+Barcha obunachilarga yubormoqchi bo'lgan xabaringizni shu yerga yuboring:
+• ✍️ <b>Matn</b>
+• 🖼 <b>Rasm</b> (izohi bilan)
+• 🎥 <b>Video</b> (izohi bilan)
+• 🔁 <b>Forward</b> (istalgan kanaldan post)
+
+<i>Bekor qilish uchun pastdagi tugmani bosing:</i>`;
+
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Bekor qilish', 'c_admin_cancel')]
+    ]);
+
+    await ctx.replyWithHTML(text, kb);
+  });
+
+  clientBot.action('c_admin_cancel', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    clientAdminStates.delete(`${botId}_${ctx.from.id}`);
+    await ctx.answerCbQuery('Bekor qilindi');
+    try { await ctx.deleteMessage(); } catch (e) {}
+    const panel = renderClientAdminPanel(botId, botRecord);
+    await ctx.replyWithHTML(panel.text, panel.keyboard);
+  });
+
+  clientBot.action('c_admin_channels', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    const curBot = db.getBot(botId) || botRecord;
+    const channels = curBot.mandatoryChannels || [];
+
+    let text = `📢 <b>MAJBURIY A'ZOLIK KANALLARI</b>\n\n`;
+    if (channels.length === 0) {
+      text += `Hozircha majburiy kanallar belgilanmagan.\nFoydalanuvchilar to'g'ridan-to'g'ri botdan foydalanishmoqda.\n\n`;
+    } else {
+      text += `Ulangan kanallar (foydalanuvchilar bu kanallarga a'zo bo'lmaguncha bot ishlamaydi):\n\n`;
+    }
+
+    const buttons = [];
+    channels.forEach((ch, idx) => {
+      text += `${idx + 1}. <b>${escapeHtml(ch.title || ch.username)}</b> (${ch.username})\n`;
+      buttons.push([Markup.button.callback(`🗑 O'chirish: ${ch.username}`, `c_del_ch_${ch.channelId || ch.username}`)]);
+    });
+
+    buttons.push([Markup.button.callback('➕ Yangi kanal qo\'shish', 'c_add_channel')]);
+    buttons.push([Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]);
+
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_add_channel', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    clientAdminStates.set(`${botId}_${ctx.from.id}`, { step: 'awaiting_channel' });
+
+    const text =
+`➕ <b>YANGI MAJBURIY KANAL QO'SHISH</b>
+
+Kanal username yoki havolasini yuboring (masalan: <code>@mening_kanalim</code>).
+
+⚠️ <b>MUHIM QOIDA:</b>
+Botingiz ushbu kanalda <b>Administrator</b> qilib qo'shilgan bo'lishi shart! Aks holda a'zolikni tekshirib bo'lmaydi.`;
+
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Bekor qilish', 'c_admin_cancel')]
+    ]);
+
+    await ctx.replyWithHTML(text, kb);
+  });
+
+  clientBot.action(/^c_del_ch_(.+)$/, async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    const target = ctx.match[1];
+    db.removeMandatoryChannel(botId, target);
+    await ctx.answerCbQuery('Kanal o\'chirildi 🗑');
+
+    const curBot = db.getBot(botId) || botRecord;
+    const channels = curBot.mandatoryChannels || [];
+    let text = `📢 <b>MAJBURIY A'ZOLIK KANALLARI</b>\n\n`;
+    if (channels.length === 0) {
+      text += `Hozircha majburiy kanallar belgilanmagan.\n\n`;
+    } else {
+      text += `Ulangan kanallar:\n\n`;
+    }
+    const buttons = [];
+    channels.forEach((ch, idx) => {
+      text += `${idx + 1}. <b>${escapeHtml(ch.title || ch.username)}</b> (${ch.username})\n`;
+      buttons.push([Markup.button.callback(`🗑 O'chirish: ${ch.username}`, `c_del_ch_${ch.channelId || ch.username}`)]);
+    });
+    buttons.push([Markup.button.callback('➕ Yangi kanal qo\'shish', 'c_add_channel')]);
+    buttons.push([Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]);
+
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_admin_start_text', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    const curBot = db.getBot(botId) || botRecord;
+
+    let text =
+`✍️ <b>BOT START (SALOMLASHISH) MATNI</b>\n\n` +
+`Hozirgi start matni:\n` +
+`━━━━━━━━━━━━━━━━━━━━━\n` +
+`${escapeHtml(curBot.customStartText || 'Standart shablon matni o\'rnatilgan.')}\n` +
+`━━━━━━━━━━━━━━━━━━━━━\n\n` +
+`<i>O'zgartirish uchun "✏️ Yangi matn kiritish" tugmasini bosing:</i>`;
+
+    const buttons = [
+      [Markup.button.callback('✏️ Yangi matn kiritish', 'c_edit_start_text')],
+      [Markup.button.callback('🔄 Standartga qaytarish', 'c_reset_start_text')],
+      [Markup.button.callback('🔙 Admin Panel', 'c_admin_back')]
+    ];
+
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+    } catch (e) {}
+  });
+
+  clientBot.action('c_edit_start_text', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    await ctx.answerCbQuery();
+    clientAdminStates.set(`${botId}_${ctx.from.id}`, { step: 'awaiting_start_text' });
+
+    await ctx.replyWithHTML(
+      `✍️ Yangi salomlashish matnini yozib yuboring:\n\n` +
+      `<i>💡 Maslahat: Foydalanuvchi ismini chiqarish uchun matnda <code>{name}</code> so'zidan foydalanishingiz mumkin.</i>`,
+      Markup.inlineKeyboard([[Markup.button.callback('❌ Bekor qilish', 'c_admin_cancel')]])
+    );
+  });
+
+  clientBot.action('c_reset_start_text', async (ctx) => {
+    if (String(ctx.from.id) !== ownerId) return ctx.answerCbQuery('Ruxsat yo\'q!');
+    db.updateBotSettings(botId, { customStartText: null });
+    await ctx.answerCbQuery('Standartga qaytarildi 🔄');
+    const panel = renderClientAdminPanel(botId, botRecord);
+    try {
+      await ctx.editMessageText(panel.text, { parse_mode: 'HTML', ...panel.keyboard });
+    } catch (e) {}
+  });
+
+  // Start matnini chiqaruvchi yordamchi funksiya
+  function sendStartWelcome(ctx, defaultHtml, keyboard = null) {
+    const curBot = db.getBot(botId) || botRecord;
+    const name = escapeHtml(ctx.from?.first_name || 'Foydalanuvchi');
+    let welcome = curBot.customStartText
+      ? curBot.customStartText.replace(/{name}/g, name)
+      : defaultHtml;
+
+    if (String(ctx.from?.id) === ownerId) {
+      welcome += `\n\n👑 <i>Siz bot egasisiz. Boshqaruv paneli uchun: /admin</i>`;
+    }
+    const extra = { parse_mode: 'HTML' };
+    if (keyboard) Object.assign(extra, keyboard);
+    return ctx.reply(welcome, extra);
+  }
 
   // 1. OB-HAVO BOTI
   if (type === 'weather') {
@@ -433,11 +934,12 @@ function setupBotHandlers(clientBot, botRecord) {
 
     clientBot.start(async (ctx) => {
       const name = ctx.from.first_name || 'Foydalanuvchi';
-      await ctx.reply(
+      await sendStartWelcome(
+        ctx,
         `Assalomu alaykum, <b>${escapeHtml(name)}</b>!\n\n` +
         `🌦 <b>Professional Ob-havo botiga xush kelibsiz!</b>\n\n` +
         `Pastdagi shaharlardan birini tanlang yoki istalgan shahar/tuman nomini yozing (masalan: <i>Chirchiq</i>, <i>Zomin</i>, <i>Moskva</i>).`,
-        { parse_mode: 'HTML', ...citiesKeyboard }
+        citiesKeyboard
       );
     });
 
@@ -502,7 +1004,8 @@ function setupBotHandlers(clientBot, botRecord) {
     ]).resize();
 
     clientBot.start(async (ctx) => {
-      await ctx.replyWithHTML(
+      await sendStartWelcome(
+        ctx,
         `Assalomu alaykum!\n🕌 <b>Professional Namoz Vaqtlari botiga xush kelibsiz!</b>\n\nQuyidagi viloyatlardan birini tanlang yoki shahar nomini yozing:`,
         namozKeyboard
       );
@@ -546,7 +1049,8 @@ function setupBotHandlers(clientBot, botRecord) {
     ]).resize();
 
     clientBot.start(async (ctx) => {
-      await ctx.replyWithHTML(
+      await sendStartWelcome(
+        ctx,
         `💵 <b>Valyuta Kurslari & Konverter Botiga xush kelibsiz!</b>\n\n` +
         `O'zbekiston Markaziy bankining real vaqtdagi rasmiy kurslarini bilish uchun pastdagi tugmalardan foydalaning yoki istalgan summani yozing:\n` +
         `• <i>100$</i> yoki <i>50 usd</i>\n` +
@@ -1397,6 +1901,10 @@ const botManager = {
 
     try {
       const clientBot = new Telegraf(botRecord.token);
+      try {
+        const botMe = await clientBot.telegram.getMe();
+        clientBot.botInfo = botMe;
+      } catch (e) {}
       setupBotHandlers(clientBot, botRecord);
 
       clientBot.catch((err) => {

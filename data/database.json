@@ -35,6 +35,58 @@
   },
   "bots": {},
   "payments": {},
+  "tariffs": {
+    "trial": {
+      "id": "trial",
+      "name": "🎁 3 Kunlik Bepul Sinov",
+      "price": 0,
+      "stars": 0,
+      "days": 3,
+      "maxBots": 1,
+      "maxSites": 1,
+      "description": "Boshlang'ich sinov: 1 ta bot va 1 ta sayt yaratish imkoniyati."
+    },
+    "starter": {
+      "id": "starter",
+      "name": "🌱 Starter (1 Oylik)",
+      "price": 15000,
+      "stars": 60,
+      "days": 30,
+      "maxBots": 3,
+      "maxSites": 3,
+      "description": "3 tagacha bot & 3 ta sayt, 30 kun faol 24/7 hosting, tezkor ishlash."
+    },
+    "pro": {
+      "id": "pro",
+      "name": "⭐ Pro Standart (1 Oylik)",
+      "price": 25000,
+      "stars": 100,
+      "days": 30,
+      "maxBots": 10,
+      "maxSites": 10,
+      "description": "10 tagacha bot & 10 ta sayt, 1 oy to'liq kafolatli 24/7 avto hosting."
+    },
+    "business": {
+      "id": "business",
+      "name": "💼 Business (3 Oylik)",
+      "price": 60000,
+      "stars": 240,
+      "days": 90,
+      "maxBots": 25,
+      "maxSites": 25,
+      "description": "25 tagacha bot & 25 ta sayt, 3 oy 24/7 faol, maxsus chegirma."
+    },
+    "vip": {
+      "id": "vip",
+      "name": "👑 VIP Lifetime (Umrbod)",
+      "price": 150000,
+      "stars": 600,
+      "days": 3650,
+      "maxBots": 999,
+      "maxSites": 999,
+      "description": "Cheksiz botlar va saytlar (999 ta), barcha 15 ta bot turidan foydalanish, VIP yordam."
+    }
+  },
   "settings": {
     "owner_id": 8422157752,
     "card_number": "6262 7201 2331 5395",

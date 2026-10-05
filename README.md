@@ -34,11 +34,28 @@ Ushbu loyiha Telegram foydalanuvchilariga hech qanday dasturlashsiz 1 daqiqa ich
 
 ---
 
-### 👑 Administrator va Ega (Owner) Paneli (`/admin`):
-- **Statistika**: Jami foydalanuvchilar, yaratilgan botlar, hozir faol ishlayotgan botlar, to'lovlar va daromad.
+### 💳 Avtomatlashtirilgan To'lov Tizimlari:
+- ⭐ **Telegram Stars (Telegram Yulduzlari)**: To'g'ridan-to'g'ri Telegram ichida Stars orqali 1 soniyada xarid qilish va avtomatik tarif yoqilishi.
+- 🟢 **Click & 🔵 Payme**: Avtomatik to'lov havolalari va Webhook API integratsiyasi (`/api/payment/click` & `/api/payment/payme`).
+- 💎 **CryptoBot**: USDT va TON orqali kriptovalyuta to'lovlari.
+- 💳 **Karta orqali o'tkazma**: Chek rasmini botga yuborish va admin tasdiqlashi.
+
+---
+
+### 👑 Mijoz Botlari Uchun Shaxsiy Admin Paneli (`/admin`):
+Platformada yaratilgan har bir mijoz botining egasi o'z botiga kirib `/admin` yuborganida quyidagi imkoniyatlarga ega bo'ladi:
+- 📊 **Statistika**: Botingizdagi jami a'zolar soni, faollik va oxirgi obunachilar ro'yxati.
+- 📢 **Xabar tarqatish (Rassilka)**: Botingizning barcha obunachilariga matn, rasm, video yoki postlarni bir zumda tarqatish.
+- 📢 **Majburiy kanallar (OP)**: Kanal qo'shish va tekshirish (foydalanuvchilar kanalingizga a'zo bo'lmaguncha botdan foydalana olishmaydi).
+- ✍️ **Start xabarini sozlash**: Botingizning boshlang'ich salomlashish matnini o'zingiz xohlagancha tahrirlash (`{name}` tegi bilan).
+
+---
+
+### 👑 Platforma Bosh Admini (Owner) Paneli (`/admin` asosiy botda):
+- **Statistika**: Jami foydalanuvchilar, yaratilgan botlar, 24/7 faol ishlayotgan botlar, to'lovlar va daromad.
 - **Mijoz botlari**: Barcha yaratilgan mijoz botlarini ko'rish, to'xtatish yoki o'chirish.
 - **Adminlar boshqaruvi**: Bosh admin (Owner) boshqa yordamchi adminlarni ID orqali qo'shishi va o'chirishi mumkin.
-- **Xabar tarqatish (Rassilka)**: Barcha foydalanuvchilarga rasm yoki matnli xabarni bir zumda yuborish.
+- **Xabar tarqatish (Rassilka)**: Barcha platforma foydalanuvchilariga bir zumda xabar yuborish.
 - **To'lov cheklari**: Kelgan to'lovlarni tasdiqlash yoki rad etish.
 
 ---

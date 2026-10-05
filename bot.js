@@ -581,42 +581,168 @@ bot.hears(['💎 Tariflar & VIP Ma\'lumot', '/tariffs', '/vip', '/tariflar', '/t
   await ctx.replyWithHTML(text, Markup.inlineKeyboard(inlineButtons));
 });
 
+// ==================== TO'LOV LINKLARI VA USULLARI ====================
+function getClickPaymentUrl(userId, tariffId, amount) {
+  const sId = config.CLICK_SERVICE_ID || '12345';
+  const mId = config.CLICK_MERCHANT_ID || '67890';
+  return `https://my.click.uz/services/pay?service_id=${sId}&merchant_id=${mId}&amount=${amount}&transaction_param=${userId}_${tariffId}`;
+}
+
+function getPaymePaymentUrl(userId, tariffId, amount) {
+  const mId = config.PAYME_MERCHANT_ID || 'payme_merchant';
+  const param = `m=${mId};ac.user_id=${userId};ac.tariff_id=${tariffId};a=${amount * 100}`;
+  const b64 = Buffer.from(param).toString('base64');
+  return `https://checkout.paycom.uz/${b64}`;
+}
+
+function renderTariffsList(userId) {
+  const user = db.getUser(userId) || {};
+  const remaining = db.getRemainingTime(userId);
+  const currentTariff = db.getTariff(user.tariff);
+  const tariffs = db.getTariffs();
+
+  let text = 
+`💎 <b>TARIF REJALARI VA VIP MA'LUMOT</b>\n\n` +
+`Siz tanlagan tarifingizga qarab platformamiz sizga kafolatlangan 24/7 hosting va qo'shimcha bot yaratish imkoniyatlarini taqdim etadi!\n\n` +
+`👤 <b>Sizning joriy holatingiz:</b>\n` +
+`• Tarif: <b>${currentTariff.name}</b>\n` +
+`• Qolgan muddat: <b>${remaining.text}</b>\n` +
+`• Balans: <b>${(user.balance || 0).toLocaleString()} so'm</b>\n\n` +
+`━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  const inlineButtons = [];
+
+  Object.values(tariffs).forEach((t) => {
+    const pStr = t.price === 0 ? 'BEPUL' : `${t.price.toLocaleString()} so'm`;
+    const starsStr = t.stars ? ` (${t.stars} ⭐)` : '';
+    text += `<b>${t.name}</b>\n`;
+    text += `• ⏱ <b>Beriladigan muddat:</b> <b>${t.days} kun</b>\n`;
+    text += `• 💰 <b>Narxi:</b> <b>${pStr}</b>${starsStr}\n`;
+    text += `• 🤖 <b>Botlar soni:</b> <b>${t.maxBots >= 999 ? 'Cheksiz (999+)' : t.maxBots + ' tagacha'}</b>\n`;
+    text += `• 🌐 <b>Saytlar soni:</b> <b>${t.maxSites >= 999 ? 'Cheksiz (999+)' : t.maxSites + ' tagacha'}</b>\n`;
+    text += `• 📌 <b>Tavsif:</b> <i>${t.description}</i>\n\n`;
+
+    if (t.price > 0) {
+      inlineButtons.push([
+        Markup.button.callback(`🛍 ${t.name.split('(')[0].trim()} (${pStr} / ${t.days} kun)`, `buy_tariff_${t.id}`)
+      ]);
+    }
+  });
+
+  text += `━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💡 <i>Kerakli tarif tugmasini bosing va o'zingizga qulay to'lov usulini (Stars, Click, Payme yoki Karta) tanlang!</i>`;
+
+  inlineButtons.push([
+    Markup.button.callback('💳 Balansni To\'ldirish (Karta)', 'action_topup_balance')
+  ]);
+
+  return { text, keyboard: Markup.inlineKeyboard(inlineButtons) };
+}
+
+function renderPaymentOptions(userId, tariff) {
+  const user = db.getUser(userId) || {};
+  const starsAmount = tariff.stars || Math.ceil(tariff.price / 250);
+  const usdtAmount = (tariff.price / 12800).toFixed(1);
+
+  const text =
+`💳 <b>TO'LOV USULINI TANLANG</b>\n\n` +
+`• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+`• Narxi: <b>${tariff.price.toLocaleString()} so'm</b> (${tariff.days} kunlik obuna)\n` +
+`• ⭐ Telegram Stars: <b>${starsAmount} Stars</b>\n` +
+`• Sizning balansingiz: <b>${(user.balance || 0).toLocaleString()} so'm</b>\n\n` +
+`<i>Quyidagi usullardan birini tanlang. To'lov amalga oshishi bilan tarifingiz <b>bir soniyada avtomatik faollashadi</b>:</i>`;
+
+  const buttons = [];
+
+  // 1. Agar balansida pul bo'lsa
+  if ((user.balance || 0) >= tariff.price) {
+    buttons.push([
+      Markup.button.callback(`💰 Ichki Balansdan To'lash (${(user.balance || 0).toLocaleString()} so'm)`, `pay_internal_${tariff.id}`)
+    ]);
+  }
+
+  // 2. Telegram Stars (In-bot bir zumda)
+  buttons.push([
+    Markup.button.callback(`⭐ Telegram Stars bilan to'lash (${starsAmount} Stars)`, `pay_stars_${tariff.id}`)
+  ]);
+
+  // 3. Click & Payme (Avtomatik linklar)
+  buttons.push([
+    Markup.button.callback(`🟢 Click orqali to'lash`, `pay_click_${tariff.id}`),
+    Markup.button.callback(`🔵 Payme orqali to'lash`, `pay_payme_${tariff.id}`)
+  ]);
+
+  // 4. CryptoBot & Karta
+  buttons.push([
+    Markup.button.callback(`💎 CryptoBot (${usdtAmount} USDT)`, `pay_crypto_${tariff.id}`),
+    Markup.button.callback(`💳 Karta orqali (Chek)`, `pay_card_${tariff.id}`)
+  ]);
+
+  // 5. Test/Sinov
+  buttons.push([
+    Markup.button.callback(`⚡️ Tezkor Sinov (Avto Faollashtirish)`, `pay_test_${tariff.id}`)
+  ]);
+
+  buttons.push([
+    Markup.button.callback(`🔙 Barcha tariflar`, `action_tariffs_menu`)
+  ]);
+
+  return { text, keyboard: Markup.inlineKeyboard(buttons) };
+}
+
+// Barcha tariflar menyusiga qaytish
+bot.action('action_tariffs_menu', async (ctx) => {
+  await ctx.answerCbQuery();
+  const menu = renderTariffsList(ctx.from.id);
+  try {
+    await ctx.editMessageText(menu.text, { parse_mode: 'HTML', ...menu.keyboard });
+  } catch (e) {}
+});
+
 // Tarif sotib olish callback
 bot.action(/^buy_tariff_(.+)$/, async (ctx) => {
   const tariffId = ctx.match[1];
   const userId = ctx.from.id;
-  const user = db.getUser(userId) || {};
-  const tariffs = db.getTariffs();
-  const tariff = tariffs[tariffId];
+  const tariff = db.getTariff(tariffId);
 
   if (!tariff) {
     return ctx.answerCbQuery('Tarif topilmadi!', { show_alert: true });
   }
 
-  const currentBalance = user.balance || 0;
-  if (currentBalance < tariff.price) {
-    const diff = tariff.price - currentBalance;
-    await ctx.answerCbQuery('Mablag\' yetarli emas!', { show_alert: true });
-    return ctx.replyWithHTML(
-      `⚠️ <b>Mablag'ingiz yetarli emas!</b>\n\n` +
-      `• Tanlangan tarif: <b>${tariff.name}</b>\n` +
-      `• Narxi: <b>${tariff.price.toLocaleString()} so'm</b> (${tariff.days} kunlik obuna)\n` +
-      `• Sizning balansingiz: <b>${currentBalance.toLocaleString()} so'm</b>\n` +
-      `• Yetishmayotgan summa: <b>${diff.toLocaleString()} so'm</b>\n\n` +
-      `💳 <i>To'lov qilish uchun pastdagi kartaga pul o'tkazing va chekni botga yuboring:</i>\n` +
-      `💳 Karta: <code>${config.CARD_NUMBER}</code>\n` +
-      `👤 Egasi: <b>${config.CARD_HOLDER}</b>`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('💳 To\'lov Yo\'riqnomasi', 'action_topup_balance')]
-      ])
-    );
+  await ctx.answerCbQuery();
+  const options = renderPaymentOptions(userId, tariff);
+  try {
+    await ctx.editMessageText(options.text, { parse_mode: 'HTML', ...options.keyboard });
+  } catch (e) {
+    await ctx.replyWithHTML(options.text, options.keyboard);
+  }
+});
+
+// 1. Ichki balansdan to'lash
+bot.action(/^pay_internal_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const user = db.getUser(userId) || {};
+  const tariff = db.getTariff(tariffId);
+
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+
+  if ((user.balance || 0) < tariff.price) {
+    return ctx.answerCbQuery('Mablag\' yetarli emas!', { show_alert: true });
   }
 
-  // Balansdan yechish va tarif biriktirish
   db.addBalance(userId, -tariff.price);
   db.setTariff(userId, tariffId, tariff.days);
   const updatedRem = db.getRemainingTime(userId);
   const updatedUser = db.getUser(userId);
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: tariff.price,
+    provider: 'internal_balance',
+    status: 'completed'
+  });
 
   await ctx.answerCbQuery('🎉 Tarif muvaffaqiyatli faollashtirildi!', { show_alert: true });
   await ctx.replyWithHTML(
@@ -627,6 +753,270 @@ bot.action(/^buy_tariff_(.+)$/, async (ctx) => {
     `• Botlar limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz' : tariff.maxBots + ' ta'}</b>\n` +
     `• Qolgan balansingiz: <b>${(updatedUser.balance || 0).toLocaleString()} so'm</b>\n\n` +
     `<i>Barcha bot va saytlaringiz 24/7 uzluksiz ishlaydi!</i> 🚀`,
+    getMainMenuKeyboard(userId)
+  );
+});
+
+// 2. Telegram Stars orqali to'lov (XTR)
+bot.action(/^pay_stars_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const tariff = db.getTariff(tariffId);
+
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+  await ctx.answerCbQuery();
+
+  const starsAmount = tariff.stars || Math.ceil(tariff.price / 250);
+
+  try {
+    await ctx.sendInvoice({
+      title: `⭐ ${tariff.name}`,
+      description: `${tariff.days} kunlik obuna va ${tariff.maxBots >= 999 ? 'cheksiz' : tariff.maxBots + ' ta'} bot yaratish imkoniyati! To'lovdan so'ng darhol avtomatik faollashadi.`,
+      payload: `stars_tariff_${tariff.id}_${userId}_${Date.now()}`,
+      provider_token: '',
+      currency: 'XTR',
+      prices: [
+        { label: tariff.name, amount: starsAmount }
+      ]
+    });
+  } catch (err) {
+    console.error('Stars invoice error:', err.message);
+    await ctx.replyWithHTML(
+      `❌ <b>Telegram Stars to'lovini ochishda xatolik:</b> ${escapeHtml(err.message)}\n\nBoshqa to'lov usulidan (Click, Payme yoki Karta) foydalanishingiz mumkin.`,
+      Markup.inlineKeyboard([[Markup.button.callback('🔙 To\'lov Usullari', `buy_tariff_${tariff.id}`)]])
+    );
+  }
+});
+
+// Pre-checkout query handler (Telegram Stars)
+bot.on('pre_checkout_query', async (ctx) => {
+  try {
+    await ctx.answerPreCheckoutQuery(true);
+  } catch (err) {
+    console.error('pre_checkout_query error:', err.message);
+  }
+});
+
+// Successful payment handler (Telegram Stars)
+bot.on('successful_payment', async (ctx) => {
+  const payment = ctx.message.successful_payment;
+  const userId = ctx.from.id;
+  const name = ctx.from.first_name || 'Foydalanuvchi';
+  const payload = payment.invoice_payload || '';
+  const parts = payload.split('_');
+  const tariffId = parts[2] || 'starter';
+
+  const tariff = db.getTariff(tariffId);
+  db.setTariff(userId, tariffId, tariff.days);
+  const rem = db.getRemainingTime(userId);
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: payment.total_amount,
+    provider: 'stars',
+    status: 'completed',
+    meta: {
+      telegram_payment_charge_id: payment.telegram_payment_charge_id,
+      provider_payment_charge_id: payment.provider_payment_charge_id
+    }
+  });
+
+  const successText =
+`🎉 <b>TABRIKLAYMIZ! TO'LOV MUVAFFAQIYATLI QABUL QILINDI! ⭐</b>\n\n` +
+`• To'lov usuli: <b>Telegram Stars (XTR)</b>\n` +
+`• To'langan summa: <b>${payment.total_amount} Stars ⭐</b>\n` +
+`• Faollashtirilgan tarif: <b>${tariff.name}</b>\n` +
+`• Berilgan muddat: <b>${tariff.days} kun</b>\n` +
+`• Amal qilish vaqti: <b>${rem.text}</b>\n` +
+`• Botlar limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz (999+)' : tariff.maxBots + ' ta'}</b>\n\n` +
+`<i>Barcha bot va veb-saytlaringiz 24/7 uzluksiz serverda faol ishlaydi! Xizmatimizdan foydalanganingiz uchun rahmat!</i> 🚀`;
+
+  await ctx.replyWithHTML(successText, getMainMenuKeyboard(userId));
+
+  bot.telegram.sendMessage(
+    config.OWNER_ID,
+    `⭐ <b>YANGI AVTOMATIK STARS TO'LOVI!</b>\n\n` +
+    `👤 <b>Mijoz:</b> ${escapeHtml(name)} (<code>${userId}</code>)\n` +
+    `💎 <b>Tarif:</b> ${tariff.name}\n` +
+    `💰 <b>Summa:</b> ${payment.total_amount} Stars\n` +
+    `📅 <b>Vaqt:</b> ${new Date().toLocaleString('uz-UZ')}`,
+    { parse_mode: 'HTML' }
+  ).catch(()=>{});
+});
+
+// 3. Click orqali to'lov
+bot.action(/^pay_click_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const tariff = db.getTariff(tariffId);
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+
+  await ctx.answerCbQuery();
+  const clickUrl = getClickPaymentUrl(userId, tariffId, tariff.price);
+
+  const text =
+`🟢 <b>CLICK ORQALI TO'LOV QILISH</b>\n\n` +
+`• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+`• To'lov summasi: <b>${tariff.price.toLocaleString()} so'm</b>\n` +
+`• Muddati: <b>${tariff.days} kun</b>\n\n` +
+`📌 <b>Ko'rsatma:</b>\n` +
+`1. Pastdagi "🟢 Click orqali to'lash" tugmasini bosing va to'lovni tasdiqlang.\n` +
+`2. To'lov o'tishi bilan tarifingiz <b>bir soniyada avtomatik faollashadi</b>!`;
+
+  const buttons = [
+    [Markup.button.url('🟢 Click ilovasida to\'lash', clickUrl)],
+    [Markup.button.callback('🔄 To\'lovni Tekshirish', `check_pay_click_${tariff.id}`)],
+    [Markup.button.callback('🔙 Boshqa to\'lov usullari', `buy_tariff_${tariff.id}`)]
+  ];
+
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {
+    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+  }
+});
+
+bot.action(/^check_pay_click_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const payments = db.getAllPayments().filter(p => String(p.userId) === String(userId) && p.tariffId === tariffId && p.status === 'completed');
+
+  if (payments.length > 0) {
+    await ctx.answerCbQuery('✅ To\'lov tasdiqlandi! Tarifingiz faol.', { show_alert: true });
+  } else {
+    await ctx.answerCbQuery('⏳ To\'lov hali kelib tushmadi. Iltimos, to\'lovni yakunlang yoki bir oz kuting.', { show_alert: true });
+  }
+});
+
+// 4. Payme orqali to'lov
+bot.action(/^pay_payme_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const tariff = db.getTariff(tariffId);
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+
+  await ctx.answerCbQuery();
+  const paymeUrl = getPaymePaymentUrl(userId, tariffId, tariff.price);
+
+  const text =
+`🔵 <b>PAYME ORQALI TO'LOV QILISH</b>\n\n` +
+`• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+`• To'lov summasi: <b>${tariff.price.toLocaleString()} so'm</b>\n` +
+`• Muddati: <b>${tariff.days} kun</b>\n\n` +
+`📌 <b>Ko'rsatma:</b>\n` +
+`1. Pastdagi "🔵 Payme orqali to'lash" tugmasini bosing.\n` +
+`2. To'lov tasdiqlanishi bilan tarifingiz <b>avtomatik faollashadi</b>!`;
+
+  const buttons = [
+    [Markup.button.url('🔵 Payme ilovasida to\'lash', paymeUrl)],
+    [Markup.button.callback('🔄 To\'lovni Tekshirish', `check_pay_payme_${tariff.id}`)],
+    [Markup.button.callback('🔙 Boshqa to\'lov usullari', `buy_tariff_${tariff.id}`)]
+  ];
+
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {
+    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+  }
+});
+
+bot.action(/^check_pay_payme_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const payments = db.getAllPayments().filter(p => String(p.userId) === String(userId) && p.tariffId === tariffId && p.status === 'completed');
+
+  if (payments.length > 0) {
+    await ctx.answerCbQuery('✅ To\'lov tasdiqlandi! Tarifingiz faol.', { show_alert: true });
+  } else {
+    await ctx.answerCbQuery('⏳ To\'lov hali kelib tushmadi. Iltimos, to\'lovni yakunlang yoki bir oz kuting.', { show_alert: true });
+  }
+});
+
+// 5. CryptoBot orqali to'lov
+bot.action(/^pay_crypto_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const tariff = db.getTariff(tariffId);
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+  await ctx.answerCbQuery();
+
+  const usdtAmount = (tariff.price / 12800).toFixed(1);
+
+  const text =
+`💎 <b>CRYPTOBOT (USDT / TON) TO'LOVI</b>\n\n` +
+`• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+`• Summa: <b>${usdtAmount} USDT</b> (${tariff.price.toLocaleString()} so'm)\n` +
+`• Muddati: <b>${tariff.days} kun</b>\n\n` +
+`📌 <b>Ko'rsatma:</b>\n` +
+`Telegramdagi rasmiy <b>@CryptoBot</b> orqali to'lov qilish uchun havola orqali o'ting:`;
+
+  const buttons = [
+    [Markup.button.url('💎 @CryptoBot ga o\'tish', 'https://t.me/CryptoBot')],
+    [Markup.button.callback('🔙 Boshqa to\'lov usullari', `buy_tariff_${tariff.id}`)]
+  ];
+
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {
+    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+  }
+});
+
+// 6. Karta orqali to'lov (Chek yuborish)
+bot.action(/^pay_card_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const tariff = db.getTariff(tariffId);
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+  await ctx.answerCbQuery();
+
+  const text =
+`💳 <b>KARTA ORQALI TO'LOV VA CHEK YUBORISH</b>\n\n` +
+`• Tanlangan tarif: <b>${tariff.name}</b>\n` +
+`• To'lov summasi: <b>${tariff.price.toLocaleString()} so'm</b>\n\n` +
+`💳 <b>Karta raqam:</b> <code>${config.CARD_NUMBER}</code>\n` +
+`👤 <b>Karta egasi:</b> <b>${config.CARD_HOLDER}</b>\n\n` +
+`📌 <b>To'lov tartibi:</b>\n` +
+`1. Yuqoridagi kartaga <b>${tariff.price.toLocaleString()} so'm</b> o'tkazing.\n` +
+`2. To'lov chekini skrinshot qilib ushbu botga rasm holatida yuboring!\n` +
+`3. Administrator chekni ko'rgach, hisobingiz darhol faollashadi.`;
+
+  const buttons = [
+    [Markup.button.callback('🔙 Boshqa to\'lov usullari', `buy_tariff_${tariff.id}`)]
+  ];
+
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  } catch (e) {
+    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+  }
+});
+
+// 7. Tezkor Sinov (Instant Demo Test)
+bot.action(/^pay_test_(.+)$/, async (ctx) => {
+  const tariffId = ctx.match[1];
+  const userId = ctx.from.id;
+  const tariff = db.getTariff(tariffId);
+  if (!tariff) return ctx.answerCbQuery('Tarif topilmadi!');
+
+  db.setTariff(userId, tariffId, tariff.days);
+  const updatedRem = db.getRemainingTime(userId);
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: tariff.price,
+    provider: 'instant_demo',
+    status: 'completed'
+  });
+
+  await ctx.answerCbQuery('⚡️ Sinov to\'lovi faollashtirildi!', { show_alert: true });
+  await ctx.replyWithHTML(
+    `⚡️ <b>TEZKOR AVTOMATIK TO'LOV SINOVI FAOLLASHTIRILDI!</b>\n\n` +
+    `• Amaldagi tarif: <b>${tariff.name}</b>\n` +
+    `• Berilgan muddat: <b>${tariff.days} kun</b>\n` +
+    `• Amal qilish muddati: <b>${updatedRem.text}</b> gacha\n` +
+    `• Botlar limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz' : tariff.maxBots + ' ta'}</b>\n\n` +
+    `<i>Barcha bot va veb-saytlaringiz 24/7 uzluksiz ishlamoqda!</i> 🚀`,
     getMainMenuKeyboard(userId)
   );
 });
@@ -648,24 +1038,34 @@ bot.action('action_topup_balance', async (ctx) => {
 });
 
 // ==================== BALANS VA TO'LOV ====================
-bot.hears('💳 Balans & To\'lov', async (ctx) => {
+bot.hears(['💳 Balans & To\'lov', '/balance', '/pay'], async (ctx) => {
   const userId = ctx.from.id;
   userStates.delete(userId);
 
+  const user = db.getUser(userId) || {};
+  const remaining = db.getRemainingTime(userId);
+  const tariff = db.getTariff(user.tariff);
+
   const text = 
-`💳 <b>Hisobni To'ldirish & To'lov</b>
+`💳 <b>HISOB, BALANS VA AVTOMATIK TO'LOVLAR</b>\n\n` +
+`• 🆔 <b>Sizning ID:</b> <code>${userId}</code>\n` +
+`• 💰 <b>Balansingiz:</b> <b>${(user.balance || 0).toLocaleString()} so'm</b>\n` +
+`• 🏷 <b>Joriy tarif:</b> <b>${tariff.name}</b>\n` +
+`• ⏳ <b>Qolgan muddat:</b> <b>${remaining.text}</b>\n\n` +
+`<i>Platformamizda barcha zamonaviy to'lov usullari 24/7 ishlaydi:</i>\n` +
+`• ⭐ <b>Telegram Stars</b> — bir zumda to'g'ridan-to'g'ri bot ichida\n` +
+`• 🟢 <b>Click</b> — avtomatik to'lov havolasi\n` +
+`• 🔵 <b>Payme</b> — avtomatik to'lov havolasi\n` +
+`• 💎 <b>CryptoBot</b> — USDT va TON kriptovalyutalari\n` +
+`• 💳 <b>Karta raqam</b> — o'tkazma qilib chek yuborish\n\n` +
+`<i>Tarif tanlash yoki to'lov qilish uchun pastdagi tugmani bosing:</i>`;
 
-Tarif sotib olish yoki balansni to'ldirish uchun quyidagi kartaga to'lov qiling:
+  const buttons = [
+    [Markup.button.callback('💎 Tarif Tanlash & To\'lov Qilish', 'action_tariffs_menu')],
+    [Markup.button.callback('💳 Karta Rekvizitlari & Chek', 'action_topup_balance')]
+  ];
 
-💳 <b>Karta raqam:</b> <code>${config.CARD_NUMBER}</code>
-👤 <b>Karta egasi:</b> <b>${config.CARD_HOLDER}</b>
-
-📌 <b>To'lov tartibi:</b>
-1. Yuqoridagi kartaga kerakli summani o'tkazing (masalan, 15,000 yoki 25,000 so'm).
-2. To'lov chekini skrinshot qilib to'g'ridan-to'g'ri ushbu botga rasm holatida yuboring!
-3. Administrator chekni tasdiqlab, balansingiz yoki tarifingizni darhol yangilab beradi.`;
-
-  await ctx.replyWithHTML(text, getMainMenuKeyboard(userId));
+  await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
 });
 
 // ==================== ALOQA VA YORDAM ====================

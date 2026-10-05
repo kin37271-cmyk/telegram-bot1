@@ -228,7 +228,23 @@
 
       <!-- Payment / Card Info -->
       <div class="glass-card rounded-2xl p-5 mb-4 border border-slate-800">
-        <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">💳 To'lov Rekvizitlari</h4>
+        <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">💳 Avtomatlashtirilgan To'lov Tizimlari</h4>
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <div class="bg-slate-900/90 rounded-xl p-2.5 border border-slate-800 flex items-center gap-2">
+            <span class="text-lg">⭐</span>
+            <div>
+              <div class="text-[11px] font-bold text-white">Telegram Stars</div>
+              <div class="text-[9px] text-amber-400">Bir zumda avtomatik</div>
+            </div>
+          </div>
+          <div class="bg-slate-900/90 rounded-xl p-2.5 border border-slate-800 flex items-center gap-2">
+            <span class="text-lg">🟢</span>
+            <div>
+              <div class="text-[11px] font-bold text-white">Click & Payme</div>
+              <div class="text-[9px] text-emerald-400">Avto-faollashuv</div>
+            </div>
+          </div>
+        </div>
         <div class="flex items-center justify-between bg-slate-900 rounded-xl p-3 border border-slate-800 mb-2">
           <span id="payCardNumber" class="text-sm font-mono font-bold text-white tracking-wider">6262 7201 2331 5395</span>
           <button onclick="copyCard()" class="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center gap-1">
@@ -1418,9 +1434,10 @@
               <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-500/20 text-blue-400">
                 🤖 ${t.maxBots >= 999 ? 'Cheksiz' : t.maxBots + ' ta bot'}
               </span>
+              ${t.stars ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-400">⭐ ${t.stars} Stars</span>` : ''}
             </div>
             <div class="text-[11px] text-slate-400 mt-1">${t.description}</div>
-            <div class="text-xs font-bold text-emerald-400 mt-1.5">${t.price === 0 ? 'BEPUL' : t.price.toLocaleString() + ' so\'m'} • <b>${t.days || 30} kunlik obuna</b></div>
+            <div class="text-xs font-bold text-emerald-400 mt-1.5">${t.price === 0 ? 'BEPUL' : t.price.toLocaleString() + ' so\'m'} ${t.stars ? '(' + t.stars + ' ⭐)' : ''} • <b>${t.days || 30} kunlik obuna</b></div>
           </div>
           ${t.price > 0 ? `
             <a href="https://t.me/MakerrUzbBot" target="_blank" class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shrink-0 shadow-md">

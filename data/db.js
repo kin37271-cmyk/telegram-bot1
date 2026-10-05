@@ -20,6 +20,7 @@ function getInitialDB() {
         id: 'trial',
         name: '🎁 3 Kunlik Bepul Sinov',
         price: 0,
+        stars: 0,
         days: 3,
         maxBots: 1,
         maxSites: 1,
@@ -27,36 +28,40 @@ function getInitialDB() {
       },
       starter: {
         id: 'starter',
-        name: '🌱 Starter (5 Kunlik)',
-        price: 10000,
-        days: 5,
+        name: '🌱 Starter (1 Oylik)',
+        price: 15000,
+        stars: 60,
+        days: 30,
         maxBots: 3,
         maxSites: 3,
-        description: '3 tagacha bot & 3 ta sayt, 5 kun faol 24/7 hosting, tezkor ishlash.'
-      },
-      standart: {
-        id: 'standart',
-        name: '⚡ Standart (10 Kunlik)',
-        price: 20000,
-        days: 10,
-        maxBots: 10,
-        maxSites: 10,
-        description: '10 tagacha bot & 10 ta sayt, 10 kun faol 24/7 hosting, yuqori tezlik.'
+        description: '3 tagacha bot & 3 ta sayt, 30 kun faol 24/7 hosting, tezkor ishlash.'
       },
       pro: {
         id: 'pro',
-        name: '⭐ Pro Premium (30 Kunlik)',
-        price: 35000,
+        name: '⭐ Pro Standart (1 Oylik)',
+        price: 25000,
+        stars: 100,
         days: 30,
+        maxBots: 10,
+        maxSites: 10,
+        description: '10 tagacha bot & 10 ta sayt, 1 oy to\'liq kafolatli 24/7 avto hosting.'
+      },
+      business: {
+        id: 'business',
+        name: '💼 Business (3 Oylik)',
+        price: 60000,
+        stars: 240,
+        days: 90,
         maxBots: 25,
         maxSites: 25,
-        description: '25 tagacha bot & 25 ta sayt, 1 oy to\'liq kafolatli 24/7 avto hosting.'
+        description: '25 tagacha bot & 25 ta sayt, 3 oy 24/7 faol, maxsus chegirma.'
       },
       vip: {
         id: 'vip',
-        name: '👑 VIP Maxsus Reja',
-        price: 50000,
-        days: 30,
+        name: '👑 VIP Lifetime (Umrbod)',
+        price: 150000,
+        stars: 600,
+        days: 3650,
         maxBots: 999,
         maxSites: 999,
         description: 'Cheksiz botlar va saytlar (999 ta), barcha 15 ta bot turidan foydalanish, VIP yordam.'
@@ -249,6 +254,18 @@ const dbManager = {
       db.tariffs = getInitialDB().tariffs;
       saveDB(db);
     }
+    const cfgTariffs = config.TARIFFS || {};
+    let changed = false;
+    for (const key of Object.keys(cfgTariffs)) {
+      if (!db.tariffs[key]) {
+        db.tariffs[key] = { ...cfgTariffs[key] };
+        changed = true;
+      } else if (db.tariffs[key].stars === undefined && cfgTariffs[key].stars !== undefined) {
+        db.tariffs[key].stars = cfgTariffs[key].stars;
+        changed = true;
+      }
+    }
+    if (changed) saveDB(db);
     return db.tariffs;
   },
 
@@ -447,6 +464,119 @@ const dbManager = {
       return true;
     }
     return false;
+  },
+
+  updateBotSettings(botId, settings) {
+    const db = loadDB();
+    if (db.bots && db.bots[botId]) {
+      db.bots[botId] = { ...db.bots[botId], ...settings };
+      saveDB(db);
+      return db.bots[botId];
+    }
+    return null;
+  },
+
+  addBotSubscriber(botId, subscriberInfo) {
+    if (!botId || !subscriberInfo || !subscriberInfo.id) return;
+    const db = loadDB();
+    if (!db.bots || !db.bots[botId]) return;
+    if (!db.bots[botId].subscribers) db.bots[botId].subscribers = {};
+    const strUserId = String(subscriberInfo.id);
+    const existing = db.bots[botId].subscribers[strUserId];
+    db.bots[botId].subscribers[strUserId] = {
+      id: subscriberInfo.id,
+      name: subscriberInfo.name || existing?.name || 'Foydalanuvchi',
+      username: subscriberInfo.username || existing?.username || '',
+      joined_at: existing?.joined_at || new Date().toISOString(),
+      last_active: new Date().toISOString()
+    };
+    saveDB(db);
+  },
+
+  getBotSubscribers(botId) {
+    const db = loadDB();
+    if (!db.bots || !db.bots[botId] || !db.bots[botId].subscribers) return [];
+    return Object.values(db.bots[botId].subscribers);
+  },
+
+  getBotSubscribersCount(botId) {
+    const db = loadDB();
+    if (!db.bots || !db.bots[botId] || !db.bots[botId].subscribers) return 0;
+    return Object.keys(db.bots[botId].subscribers).length;
+  },
+
+  addMandatoryChannel(botId, channelInfo) {
+    const db = loadDB();
+    if (!db.bots || !db.bots[botId]) return null;
+    if (!db.bots[botId].mandatoryChannels) db.bots[botId].mandatoryChannels = [];
+    const exists = db.bots[botId].mandatoryChannels.some(
+      c => String(c.channelId) === String(channelInfo.channelId) || (c.username && c.username.toLowerCase() === (channelInfo.username || '').toLowerCase())
+    );
+    if (!exists) {
+      db.bots[botId].mandatoryChannels.push({
+        channelId: channelInfo.channelId,
+        username: channelInfo.username || '',
+        title: channelInfo.title || channelInfo.username || 'Kanal',
+        inviteUrl: channelInfo.inviteUrl || ''
+      });
+      saveDB(db);
+    }
+    return db.bots[botId].mandatoryChannels;
+  },
+
+  removeMandatoryChannel(botId, channelIdOrUsername) {
+    const db = loadDB();
+    if (!db.bots || !db.bots[botId] || !db.bots[botId].mandatoryChannels) return false;
+    const initialLen = db.bots[botId].mandatoryChannels.length;
+    db.bots[botId].mandatoryChannels = db.bots[botId].mandatoryChannels.filter(
+      c => String(c.channelId) !== String(channelIdOrUsername) && (c.username || '').toLowerCase() !== String(channelIdOrUsername).toLowerCase()
+    );
+    if (db.bots[botId].mandatoryChannels.length !== initialLen) {
+      saveDB(db);
+      return true;
+    }
+    return false;
+  },
+
+  // PAYMENTS (Avtomatik to'lovlar - Stars, Click, Payme, CryptoBot)
+  createPaymentRecord(data) {
+    const db = loadDB();
+    if (!db.payments) db.payments = {};
+    const id = 'pay_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    const rec = {
+      id,
+      userId: data.userId,
+      tariffId: data.tariffId,
+      amount: data.amount,
+      provider: data.provider || 'manual', // 'stars' | 'click' | 'payme' | 'cryptobot' | 'manual'
+      status: data.status || 'pending', // 'pending' | 'completed' | 'failed'
+      created_at: new Date().toISOString(),
+      meta: data.meta || {}
+    };
+    db.payments[id] = rec;
+    saveDB(db);
+    return rec;
+  },
+
+  completePaymentRecord(id, meta = {}) {
+    const db = loadDB();
+    if (!db.payments || !db.payments[id]) return null;
+    const p = db.payments[id];
+    p.status = 'completed';
+    p.completed_at = new Date().toISOString();
+    p.meta = { ...p.meta, ...meta };
+    saveDB(db);
+    return p;
+  },
+
+  getPayment(id) {
+    const db = loadDB();
+    return (db.payments && db.payments[id]) || null;
+  },
+
+  getAllPayments() {
+    const db = loadDB();
+    return Object.values(db.payments || {});
   },
 
   getStats() {

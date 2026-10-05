@@ -446,6 +446,239 @@ app.post('/api/admin/broadcast', async (req, res) => {
   });
 });
 
+// ==================== TO'LOV TIZIMLARI WEBHOOKLARI ====================
+const { Telegraf: MainTelegraf } = require('telegraf');
+const mainTelegram = new MainTelegraf(config.BOT_TOKEN).telegram;
+
+// 1. CLICK WEBHOOK (Prepare & Complete)
+app.post('/api/payment/click/prepare', (req, res) => {
+  const { click_trans_id, service_id, click_paydoc_id, merchant_trans_id, amount, action, error } = req.body;
+  const [userId, tariffId] = (merchant_trans_id || '').split('_');
+  const user = db.getUser(userId);
+  const tariff = db.getTariff(tariffId);
+
+  if (!user || !tariff) {
+    return res.json({ error: -5, error_note: 'Foydalanuvchi yoki tarif topilmadi' });
+  }
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: Number(amount),
+    provider: 'click',
+    status: 'pending',
+    meta: { click_trans_id, service_id, click_paydoc_id }
+  });
+
+  return res.json({
+    click_trans_id,
+    merchant_trans_id,
+    merchant_prepare_id: Date.now(),
+    error: 0,
+    error_note: 'Success'
+  });
+});
+
+app.post('/api/payment/click/complete', async (req, res) => {
+  const { click_trans_id, service_id, click_paydoc_id, merchant_trans_id, amount, error } = req.body;
+  const [userId, tariffId] = (merchant_trans_id || '').split('_');
+  const user = db.getUser(userId);
+  const tariff = db.getTariff(tariffId);
+
+  if (!user || !tariff) {
+    return res.json({ error: -5, error_note: 'Foydalanuvchi yoki tarif topilmadi' });
+  }
+
+  if (Number(error) < 0) {
+    return res.json({ error: -9, error_note: 'To\'lov bekor qilindi' });
+  }
+
+  db.setTariff(userId, tariffId, tariff.days);
+  const rem = db.getRemainingTime(userId);
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: Number(amount),
+    provider: 'click',
+    status: 'completed',
+    meta: { click_trans_id, service_id, click_paydoc_id }
+  });
+
+  mainTelegram.sendMessage(
+    userId,
+    `🎉 <b>TABRIKLAYMIZ! TO'LOV MUVAFFAQIYATLI QABUL QILINDI! 🟢</b>\n\n` +
+    `• To'lov usuli: <b>Click</b>\n` +
+    `• To'langan summa: <b>${Number(amount).toLocaleString()} so'm</b>\n` +
+    `• Faollashtirilgan tarif: <b>${tariff.name}</b>\n` +
+    `• Berilgan muddat: <b>${tariff.days} kun</b> (${rem.text})\n` +
+    `• Botlar limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz' : tariff.maxBots + ' ta'}</b>\n\n` +
+    `<i>Barcha bot va saytlaringiz 24/7 serverda uzluksiz ishlaydi!</i> 🚀`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+
+  mainTelegram.sendMessage(
+    config.OWNER_ID,
+    `🟢 <b>YANGI CLICK TO'LOVI!</b>\n\n` +
+    `👤 <b>Mijoz:</b> ${user.name} (<code>${userId}</code>)\n` +
+    `💎 <b>Tarif:</b> ${tariff.name}\n` +
+    `💰 <b>Summa:</b> ${Number(amount).toLocaleString()} so'm\n` +
+    `🆔 <b>Click Trans ID:</b> <code>${click_trans_id}</code>`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+
+  return res.json({
+    click_trans_id,
+    merchant_trans_id,
+    merchant_confirm_id: Date.now(),
+    error: 0,
+    error_note: 'Success'
+  });
+});
+
+// 2. PAYME WEBHOOK (JSON-RPC 2.0)
+app.post('/api/payment/payme', async (req, res) => {
+  const { method, params, id } = req.body;
+
+  if (method === 'CheckPerformTransaction') {
+    const { account } = params || {};
+    const userId = account?.user_id;
+    const tariffId = account?.tariff_id;
+    const user = db.getUser(userId);
+    const tariff = db.getTariff(tariffId);
+
+    if (!user || !tariff) {
+      return res.json({
+        error: { code: -31050, message: { uz: 'Foydalanuvchi topilmadi', ru: 'Пользователь не найден' } },
+        id
+      });
+    }
+
+    return res.json({ result: { allow: true }, id });
+  }
+
+  if (method === 'PerformTransaction') {
+    const { id: transId } = params || {};
+    const account = params?.account || {};
+    const amount = (params?.amount || 0) / 100;
+    const userId = account.user_id;
+    const tariffId = account.tariff_id;
+
+    const user = db.getUser(userId);
+    const tariff = db.getTariff(tariffId);
+
+    if (user && tariff) {
+      db.setTariff(userId, tariffId, tariff.days);
+      const rem = db.getRemainingTime(userId);
+
+      db.createPaymentRecord({
+        userId,
+        tariffId,
+        amount,
+        provider: 'payme',
+        status: 'completed',
+        meta: { payme_trans_id: transId }
+      });
+
+      mainTelegram.sendMessage(
+        userId,
+        `🎉 <b>TABRIKLAYMIZ! TO'LOV MUVAFFAQIYATLI QABUL QILINDI! 🔵</b>\n\n` +
+        `• To'lov usuli: <b>Payme</b>\n` +
+        `• To'langan summa: <b>${amount.toLocaleString()} so'm</b>\n` +
+        `• Faollashtirilgan tarif: <b>${tariff.name}</b>\n` +
+        `• Berilgan muddat: <b>${tariff.days} kun</b> (${rem.text})\n\n` +
+        `<i>Barcha bot va saytlaringiz 24/7 serverda uzluksiz ishlaydi!</i> 🚀`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+
+    return res.json({
+      result: { transaction: transId, perform_time: Date.now(), state: 2 },
+      id
+    });
+  }
+
+  return res.json({ result: { state: 1 }, id });
+});
+
+// 3. CRYPTOBOT WEBHOOK (@CryptoBot)
+app.post('/api/payment/cryptobot', async (req, res) => {
+  const { update_type, payload } = req.body;
+  if (update_type === 'invoice_paid' && payload) {
+    const { amount, asset, custom_data } = payload;
+    let meta = {};
+    try { meta = JSON.parse(custom_data || '{}'); } catch (e) {}
+    const { userId, tariffId } = meta;
+
+    if (userId && tariffId) {
+      const tariff = db.getTariff(tariffId);
+      db.setTariff(userId, tariffId, tariff.days);
+      const rem = db.getRemainingTime(userId);
+
+      db.createPaymentRecord({
+        userId,
+        tariffId,
+        amount: Number(amount),
+        provider: 'cryptobot',
+        status: 'completed',
+        meta: { asset, invoice_id: payload.invoice_id }
+      });
+
+      mainTelegram.sendMessage(
+        userId,
+        `🎉 <b>TABRIKLAYMIZ! TO'LOV MUVAFFAQIYATLI QABUL QILINDI! 💎</b>\n\n` +
+        `• To'lov usuli: <b>CryptoBot (${asset})</b>\n` +
+        `• To'langan summa: <b>${amount} ${asset}</b>\n` +
+        `• Faollashtirilgan tarif: <b>${tariff.name}</b>\n` +
+        `• Berilgan muddat: <b>${tariff.days} kun</b> (${rem.text})\n\n` +
+        `<i>Barcha bot va saytlaringiz 24/7 faol ishlaydi!</i> 🚀`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+  }
+  return res.json({ ok: true });
+});
+
+// 4. TEST / SIMULATE PAYMENT (Avtomatik to'lovni sinab ko'rish endpointi)
+app.get('/api/payment/simulate/:userId/:tariffId', async (req, res) => {
+  const { userId, tariffId } = req.params;
+  const user = db.getUser(userId);
+  const tariff = db.getTariff(tariffId);
+
+  if (!user || !tariff) {
+    return res.status(404).json({ error: 'User yoki tarif topilmadi' });
+  }
+
+  db.setTariff(userId, tariffId, tariff.days);
+  const rem = db.getRemainingTime(userId);
+
+  db.createPaymentRecord({
+    userId,
+    tariffId,
+    amount: tariff.price,
+    provider: 'simulated_instant',
+    status: 'completed',
+    meta: { tested_at: new Date().toISOString() }
+  });
+
+  mainTelegram.sendMessage(
+    userId,
+    `🎉 <b>TEST TO'LOV FAOLLASHTIRILDI! ⚡️</b>\n\n` +
+    `• Tarif: <b>${tariff.name}</b>\n` +
+    `• Berilgan muddat: <b>${tariff.days} kun</b> (${rem.text})\n` +
+    `• Bot limiti: <b>${tariff.maxBots >= 999 ? 'Cheksiz' : tariff.maxBots + ' ta'}</b>\n\n` +
+    `<i>Barcha bot va saytlaringiz 24/7 rejimida ishlamoqda!</i> 🚀`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+
+  res.json({
+    success: true,
+    message: `${user.name} uchun ${tariff.name} bir zumda avtomatik faollashtirildi!`,
+    tariff: tariff.name,
+    days: tariff.days
+  });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), time: new Date().toISOString() });

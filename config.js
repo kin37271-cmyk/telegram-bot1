@@ -10,6 +10,14 @@ module.exports = {
   PORT: process.env.PORT || 10000,
   BASE_URL: process.env.RENDER_EXTERNAL_URL || 'https://telegram-bot-maker-live.onrender.com',
 
+  // To'lov tizimlari sozlamalari
+  CLICK_SERVICE_ID: process.env.CLICK_SERVICE_ID || '',
+  CLICK_MERCHANT_ID: process.env.CLICK_MERCHANT_ID || '',
+  CLICK_SECRET_KEY: process.env.CLICK_SECRET_KEY || 'makerbot_click_secret',
+  PAYME_MERCHANT_ID: process.env.PAYME_MERCHANT_ID || '',
+  PAYME_SECRET_KEY: process.env.PAYME_SECRET_KEY || 'makerbot_payme_secret',
+  CRYPTOBOT_TOKEN: process.env.CRYPTOBOT_TOKEN || '',
+
   // Sinov muddati (kun)
   TRIAL_DAYS: 3,
 
@@ -19,6 +27,7 @@ module.exports = {
       id: 'trial',
       name: '🎁 3 Kunlik Bepul Sinov',
       price: 0,
+      stars: 0,
       days: 3,
       maxBots: 1,
       maxSites: 1,
@@ -28,6 +37,7 @@ module.exports = {
       id: 'starter',
       name: '🌱 Starter (1 Oylik)',
       price: 15000,
+      stars: 60,
       days: 30,
       maxBots: 3,
       maxSites: 3,
@@ -37,6 +47,7 @@ module.exports = {
       id: 'pro',
       name: '⭐ Pro Standart (1 Oylik)',
       price: 25000,
+      stars: 100,
       days: 30,
       maxBots: 10,
       maxSites: 10,
@@ -46,6 +57,7 @@ module.exports = {
       id: 'business',
       name: '💼 Business (3 Oylik)',
       price: 60000,
+      stars: 240,
       days: 90,
       maxBots: 25,
       maxSites: 25,
@@ -55,6 +67,7 @@ module.exports = {
       id: 'vip',
       name: '👑 VIP Lifetime (Umrbod)',
       price: 150000,
+      stars: 600,
       days: 3650,
       maxBots: 999,
       maxSites: 999,
