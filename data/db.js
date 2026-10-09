@@ -247,6 +247,22 @@ const dbManager = {
     return user;
   },
 
+  setUserBlocked(userId, isBlocked) {
+    const db = loadDB();
+    const strId = String(userId);
+    if (db.users[strId]) {
+      db.users[strId].is_blocked = (isBlocked === undefined) ? !db.users[strId].is_blocked : !!isBlocked;
+      db.users[strId].last_active = new Date().toISOString();
+      saveDB(db);
+      return db.users[strId];
+    }
+    return null;
+  },
+
+  toggleBlockUser(userId) {
+    return this.setUserBlocked(userId);
+  },
+
   // TARIFFS (Yagona baza va dinamik boshqaruv)
   getTariffs() {
     const db = loadDB();
@@ -658,6 +674,7 @@ const dbManager = {
         tariff: u.tariff || 'trial',
         tariff_name: (config.TARIFFS[u.tariff] || {}).name || u.tariff || 'Sinov',
         expires_at: u.expires_at,
+        is_blocked: !!u.is_blocked,
         is_expired: remaining.isExpired,
         remaining_text: remaining.text,
         remaining_days: remaining.days,

@@ -88,11 +88,18 @@ bot.use(async (ctx, next) => {
       }
     } catch (e) {}
 
-    db.getOrCreateUser(ctx.from.id, {
+    const u = db.getOrCreateUser(ctx.from.id, {
       name: ctx.from.first_name || 'Foydalanuvchi',
       username: ctx.from.username || '',
       photo_url: photoUrl
     });
+
+    if (u && u.is_blocked && !isAdmin(ctx.from.id)) {
+      if (ctx.callbackQuery) {
+        return ctx.answerCbQuery('🚫 Sizning hisobingiz ma\'muriyat tomonidan bloklangan!', { show_alert: true });
+      }
+      return ctx.replyWithHTML('🚫 <b>Sizning profilingiz ma\'muriyat tomonidan bloklangan!</b>\n\nAgar bu xatolik bo\'lsa, administrator bilan bog\'laning: @ISMOILUZB022');
+    }
   }
   return next();
 });
@@ -1150,21 +1157,233 @@ bot.hears('👥 Foydalanuvchilar', async (ctx) => {
   const userId = ctx.from.id;
   if (!isAdmin(userId)) return;
 
-  const users = db.getAllUsersDetailed().slice(0, 10);
-  let text = `👥 <b>Foydalanuvchilar Ro'yxati (Top 10):</b>\n\n`;
+  const users = db.getAllUsersDetailed().slice(0, 15);
+  if (!users || users.length === 0) {
+    return ctx.reply('Tizimda hozircha foydalanuvchilar mavjud emas.', adminMenuKeyboard);
+  }
 
+  let text = `👥 <b>FOYDALANUVCHILARNI BOSHQARISH (${users.length} ta):</b>\n\n`;
   users.forEach((u, idx) => {
-    const phoneStr = u.phone ? `📱 ${u.phone}` : '📱 Telefon: yo\'q';
-    text += `<b>${idx + 1}. ${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'usernamesiz'})\n`;
-    text += `   • 🆔 ID: <code>${u.id}</code> | ${phoneStr}\n`;
-    text += `   • 💰 Balans: <b>${(u.balance||0).toLocaleString()} so'm</b> | Tarif: <b>${u.tariff}</b> (${u.remaining_text})\n`;
-    text += `   • 🤖 Botlar: <b>${u.bots_count} ta</b> (${u.active_bots_count} faol) | 🌐 Saytlar: <b>${u.sites_count} ta</b>\n`;
-    text += `   • 🏆 Reyting: <b>#${u.rank}</b> (${u.activity_label})\n\n`;
+    const statusIcon = u.is_blocked ? '🚫 [BLOKLANGAN]' : '✅';
+    text += `<b>${idx + 1}. ${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'usernamesiz'}) ${statusIcon}\n`;
+    text += `   • 🆔 ID: <code>${u.id}</code> | 📱 ${u.phone || 'yo\'q'}\n`;
+    text += `   • 💰 Balans: <b>${(u.balance||0).toLocaleString()} so'm</b> | 🏷 <b>${u.tariff}</b> (${u.remaining_text})\n\n`;
   });
 
-  text += `<i>Boshqaruv buyruqlari:\n/addmoney ID SUMMA\n/adddays ID KUN\n/settariff ID TARIF\n/setphone ID TEL\n/togglebot BOT_ID</i>`;
+  text += `<i>Quyidagi har bir foydalanuvchi kartasi orqali tugmalarni bosib darhol pul qo'shishingiz, tarif biriktirishingiz yoki bloklashingiz mumkin 👇</i>`;
 
   await ctx.replyWithHTML(text, adminMenuKeyboard);
+
+  // Send interactive management card for each user
+  for (const u of users) {
+    const blockBtnText = u.is_blocked ? '🔓 Blokdan olish' : '🚫 Bloklash';
+    const cardText = 
+`👤 <b>#${u.rank} ${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'usernamesiz'})
+${u.is_blocked ? '🔴 <b>PROFIL BLOKLANGAN!</b>\n' : ''}🆔 <b>ID:</b> <code>${u.id}</code>
+📱 <b>Tel:</b> <b>${u.phone || 'yo\'q'}</b>
+💰 <b>Balans:</b> <b>${(u.balance || 0).toLocaleString()} so'm</b>
+🏷 <b>Tarif:</b> <b>${u.tariff}</b> (${u.remaining_text})
+🤖 <b>Botlar:</b> ${u.bots_count} ta (${u.active_bots_count} faol) | 🌐 <b>Saytlar:</b> ${u.sites_count} ta
+🏆 <b>Reyting:</b> #${u.rank} (${u.activity_label})`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('💰 Pul qo\'shish', `adm_umoney_${u.id}`),
+        Markup.button.callback('🏷 Tarif berish', `adm_utariff_${u.id}`)
+      ],
+      [
+        Markup.button.callback(blockBtnText, `adm_ublock_${u.id}`),
+        Markup.button.callback('📅 Kun qo\'shish', `adm_udays_${u.id}`)
+      ]
+    ]);
+
+    await ctx.replyWithHTML(cardText, keyboard);
+  }
+});
+
+// Bloklash va blokdan chiqarish callback
+bot.action(/^adm_ublock_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  const u = db.toggleBlockUser(targetId);
+  if (!u) return ctx.answerCbQuery('Foydalanuvchi topilmadi!');
+
+  if (u.is_blocked) {
+    await ctx.answerCbQuery('🚫 Foydalanuvchi bloklandi!', { show_alert: true });
+    bot.telegram.sendMessage(targetId, '🚫 Sizning profilingiz ma\'muriyat tomonidan bloklandi.').catch(()=>{});
+  } else {
+    await ctx.answerCbQuery('✅ Foydalanuvchi blokdan chiqarildi!', { show_alert: true });
+    bot.telegram.sendMessage(targetId, '✅ Sizning profilingiz blokdan chiqarildi. Botdan to\'liq foydalanishingiz mumkin!').catch(()=>{});
+  }
+
+  const blockBtnText = u.is_blocked ? '🔓 Blokdan olish' : '🚫 Bloklash';
+  const remaining = db.getRemainingTime(u.id);
+  const cardText = 
+`👤 <b>${escapeHtml(u.name)}</b> (${u.username ? '@' + escapeHtml(u.username) : 'usernamesiz'})
+${u.is_blocked ? '🔴 <b>PROFIL BLOKLANGAN!</b>\n' : ''}🆔 <b>ID:</b> <code>${u.id}</code>
+📱 <b>Tel:</b> <b>${u.phone || 'yo\'q'}</b>
+💰 <b>Balans:</b> <b>${(u.balance || 0).toLocaleString()} so'm</b>
+🏷 <b>Tarif:</b> <b>${u.tariff}</b> (${remaining.text})
+🤖 <b>Botlar:</b> ${db.getBotsByUser(u.id).length} ta`;
+
+  await ctx.editMessageText(cardText, {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('💰 Pul qo\'shish', `adm_umoney_${u.id}`),
+        Markup.button.callback('🏷 Tarif berish', `adm_utariff_${u.id}`)
+      ],
+      [
+        Markup.button.callback(blockBtnText, `adm_ublock_${u.id}`),
+        Markup.button.callback('📅 Kun qo\'shish', `adm_udays_${u.id}`)
+      ]
+    ])
+  }).catch(()=>{});
+});
+
+// Tezkor pul qo'shish tanlash
+bot.action(/^adm_umoney_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  await ctx.answerCbQuery();
+
+  const keyboard = Markup.inlineKeyboard([
+    [
+      Markup.button.callback('+10,000 so\'m', `adm_setm_${targetId}_10000`),
+      Markup.button.callback('+25,000 so\'m', `adm_setm_${targetId}_25000`)
+    ],
+    [
+      Markup.button.callback('+50,000 so\'m', `adm_setm_${targetId}_50000`),
+      Markup.button.callback('+100,000 so\'m', `adm_setm_${targetId}_100000`)
+    ]
+  ]);
+
+  await ctx.replyWithHTML(
+    `💰 <b>ID <code>${targetId}</code> hisobiga pul qo'shish:</b>\n\nKerakli summani tanlang yoki buyruq orqali kiriting:\n<code>/addmoney ${targetId} 50000</code>`,
+    keyboard
+  );
+});
+
+// Pulni belgilash callback
+bot.action(/^adm_setm_([^_]+)_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  const amount = Number(ctx.match[2]);
+  const u = db.addBalance(targetId, amount);
+  if (u) {
+    await ctx.answerCbQuery(`✅ ${amount.toLocaleString()} so'm qo'shildi!`, { show_alert: true });
+    ctx.replyWithHTML(`✅ <b>Foydalanuvchi ${targetId} ga +${amount.toLocaleString()} so'm qo'shildi!</b>\nYangi balans: <b>${u.balance.toLocaleString()} so'm</b>`);
+    bot.telegram.sendMessage(targetId, `💰 Balansingizga ma'muriyat tomonidan <b>+${amount.toLocaleString()} so'm</b> qo'shildi!\nJoriy balans: <b>${u.balance.toLocaleString()} so'm</b>`, { parse_mode: 'HTML' }).catch(()=>{});
+  }
+});
+
+// Tarif tanlash
+bot.action(/^adm_utariff_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  await ctx.answerCbQuery();
+
+  const tariffs = db.getTariffs();
+  const buttons = Object.values(tariffs).map(t => [
+    Markup.button.callback(`${t.name} (${t.days} kun)`, `adm_sett_${targetId}_${t.id}`)
+  ]);
+
+  await ctx.replyWithHTML(
+    `🏷 <b>ID <code>${targetId}</code> uchun tarif tanlang:</b>`,
+    Markup.inlineKeyboard(buttons)
+  );
+});
+
+// Tarifni biriktirish callback
+bot.action(/^adm_sett_([^_]+)_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  const tariffId = ctx.match[2];
+
+  const u = db.setTariff(targetId, tariffId);
+  if (u) {
+    const tariffObj = db.getTariff(tariffId);
+    const rem = db.getRemainingTime(targetId);
+    await ctx.answerCbQuery(`✅ ${tariffObj.name} berildi!`, { show_alert: true });
+    ctx.replyWithHTML(`✅ <b>Foydalanuvchi ${targetId} ga ${tariffObj.name} tarifi berildi!</b>\nMuddati: <b>${rem.text}</b>`);
+    bot.telegram.sendMessage(targetId, `🎉 Sizga administrator tomonidan <b>${tariffObj.name}</b> tarifi biriktirildi!\nMuddati: <b>${rem.text}</b>`, { parse_mode: 'HTML' }).catch(()=>{});
+  }
+});
+
+// Kun qo'shish tanlash
+bot.action(/^adm_udays_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  await ctx.answerCbQuery();
+
+  const keyboard = Markup.inlineKeyboard([
+    [
+      Markup.button.callback('+5 kun', `adm_setd_${targetId}_5`),
+      Markup.button.callback('+10 kun', `adm_setd_${targetId}_10`)
+    ],
+    [
+      Markup.button.callback('+30 kun', `adm_setd_${targetId}_30`),
+      Markup.button.callback('+90 kun', `adm_setd_${targetId}_90`)
+    ]
+  ]);
+
+  await ctx.replyWithHTML(
+    `📅 <b>ID <code>${targetId}</code> ga obuna kuni qo'shish:</b>\n\nYoki buyruq orqali kiriting: <code>/adddays ${targetId} 30</code>`,
+    keyboard
+  );
+});
+
+// Kunni belgilash callback
+bot.action(/^adm_setd_([^_]+)_(.+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!isAdmin(adminId)) return ctx.answerCbQuery('Ruxsat yo\'q!');
+  const targetId = ctx.match[1];
+  const days = Number(ctx.match[2]);
+
+  const u = db.addDays(targetId, days);
+  if (u) {
+    const rem = db.getRemainingTime(targetId);
+    await ctx.answerCbQuery(`✅ +${days} kun qo'shildi!`, { show_alert: true });
+    ctx.replyWithHTML(`✅ <b>Foydalanuvchi ${targetId} ga +${days} kun qo'shildi!</b>\nYangi muddat: <b>${rem.text}</b>`);
+    bot.telegram.sendMessage(targetId, `📅 Obunangizga administrator tomonidan <b>+${days} kun</b> qo'shildi!\nYangi muddat: <b>${rem.text}</b>`, { parse_mode: 'HTML' }).catch(()=>{});
+  }
+});
+
+// Admin bloklash / blokdan chiqarish buyruqlari
+bot.command('block', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const parts = ctx.message.text.split(' ');
+  const targetId = parts[1];
+  if (!targetId) return ctx.reply('Format: /block USER_ID');
+
+  const u = db.setUserBlocked(targetId, true);
+  if (u) {
+    ctx.reply(`🚫 Foydalanuvchi ${targetId} muvaffaqiyatli bloklandi!`);
+    bot.telegram.sendMessage(targetId, '🚫 Sizning profilingiz ma\'muriyat tomonidan bloklandi.').catch(()=>{});
+  } else {
+    ctx.reply('Foydalanuvchi topilmadi.');
+  }
+});
+
+bot.command('unblock', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const parts = ctx.message.text.split(' ');
+  const targetId = parts[1];
+  if (!targetId) return ctx.reply('Format: /unblock USER_ID');
+
+  const u = db.setUserBlocked(targetId, false);
+  if (u) {
+    ctx.reply(`✅ Foydalanuvchi ${targetId} blokdan chiqarildi!`);
+    bot.telegram.sendMessage(targetId, '✅ Sizning profilingiz blokdan chiqarildi. Botdan foydalanishingiz mumkin!').catch(()=>{});
+  } else {
+    ctx.reply('Foydalanuvchi topilmadi.');
+  }
 });
 
 bot.hears('🏆 Mijozlar Reytingi', async (ctx) => {

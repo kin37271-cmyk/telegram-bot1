@@ -93,6 +93,7 @@ app.get('/api/me', (req, res) => {
     remaining_text: remaining.text,
     remaining_days: remaining.days,
     is_admin: String(userId) === String(config.OWNER_ID),
+    is_blocked: !!user.is_blocked,
     score: detailed.score || 0,
     activity_level: detailed.activity_level || 'new',
     activity_label: detailed.activity_label || '🌱 Yangi Mijoz',
@@ -134,6 +135,10 @@ app.post('/api/sites', (req, res) => {
   const user = db.getUser(userId);
   if (!user) {
     return res.status(400).json({ success: false, message: 'Foydalanuvchi topilmadi' });
+  }
+
+  if (user.is_blocked && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({ success: false, message: 'Sizning hisobingiz bloklangan!' });
   }
 
   const remaining = db.getRemainingTime(userId);
@@ -195,6 +200,10 @@ app.post('/api/bots', async (req, res) => {
   const user = db.getUser(userId);
   if (!user) {
     return res.status(400).json({ success: false, message: 'Foydalanuvchi topilmadi' });
+  }
+
+  if (user.is_blocked && String(userId) !== String(config.OWNER_ID)) {
+    return res.status(403).json({ success: false, message: 'Sizning hisobingiz bloklangan!' });
   }
 
   const remaining = db.getRemainingTime(userId);
@@ -376,6 +385,15 @@ app.post('/api/admin/tariff', (req, res) => {
   if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
 
   const user = db.setTariff(target_user_id, tariff, days);
+  res.json({ success: !!user, user });
+});
+
+// Admin toggle block user
+app.post('/api/admin/block', (req, res) => {
+  const { admin_id, target_user_id, is_blocked } = req.body;
+  if (!isAdmin(admin_id)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+
+  const user = db.setUserBlocked(target_user_id, is_blocked);
   res.json({ success: !!user, user });
 });
 
