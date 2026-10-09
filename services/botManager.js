@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const db = require('../data/db');
+const mediaDownloader = require('./mediaDownloader');
 
 
 let btchDl;
@@ -1870,6 +1871,111 @@ Botingiz ushbu kanalda <b>Administrator</b> qilib qo'shilgan bo'lishi shart! Aks
       );
     });
   }
+
+  // 17. INSTAGRAM & MEDIA YUKLOVCHI BOT
+  else if (type === 'downloader') {
+    const dlKeyboard = Markup.keyboard([
+      ['📥 Video Yuklash', 'ℹ️ Bot Haqida'],
+      ['⚡️ Qo\'llanma', '🌐 Qo\'llab-quvvatlanadigan Tarmoqlar']
+    ]).resize();
+
+    clientBot.start(async (ctx) => {
+      const customStart = botRecord.customStartText;
+      if (customStart) {
+        return ctx.replyWithHTML(escapeHtml(customStart), dlKeyboard);
+      }
+      await ctx.replyWithHTML(
+        `👋 <b>Assalomu alaykum! Video va Media Yuklovchi botga xush kelibsiz!</b>\n\n` +
+        `📥 <b>Menga quyidagi tarmoqlar video havolasini yuboring:</b>\n` +
+        `• <b>Instagram:</b> Reels, Post, Karusel, IGTV\n` +
+        `• <b>TikTok:</b> Suv belgisisiz (No Watermark)\n` +
+        `• <b>YouTube:</b> Shorts va qisqa videolar\n` +
+        `• <b>Pinterest:</b> HD video va pinlar\n\n` +
+        `🚀 <i>Shunchaki Instagram yoki TikTok havolasini shu yerga yuboring, video bir necha soniyada tayyor bo'ladi!</i>`,
+        dlKeyboard
+      );
+    });
+
+    clientBot.hears('📥 Video Yuklash', async (ctx) => {
+      await ctx.replyWithHTML(`Iltimos, Instagram Reels yoki TikTok video havolasini shu yerga yuboring 👇`);
+    });
+
+    clientBot.hears('ℹ️ Bot Haqida', async (ctx) => {
+      await ctx.replyWithHTML(
+        `ℹ️ <b>Bot Haqida:</b>\n\n` +
+        `Ushbu bot Instagram, TikTok va boshqa tarmoqlardagi videolarni eng yuqori sifatda, tezkor va suv belgisisiz yuklab berish uchun xizmat qiladi.\n\n` +
+        `⚡️ 24/7 rejimda to'xtovsiz ishlaydi.`,
+        dlKeyboard
+      );
+    });
+
+    clientBot.hears('🌐 Qo\'llab-quvvatlanadigan Tarmoqlar', async (ctx) => {
+      await ctx.replyWithHTML(
+        `🌐 <b>Qo'llab-quvvatlanadigan tarmoqlar:</b>\n\n` +
+        `✅ <b>Instagram</b> — Reels, Postlar, Karusel, IGTV\n` +
+        `✅ <b>TikTok</b> — Suv belgisisiz toza HD video\n` +
+        `✅ <b>YouTube Shorts</b> — Qisqa videolar\n` +
+        `✅ <b>Pinterest</b> — Pin videolar\n\n` +
+        `💡 <i>Istalgan birining havolasini yuborib ko'ring!</i>`,
+        dlKeyboard
+      );
+    });
+
+    clientBot.hears('⚡️ Qo\'llanma', async (ctx) => {
+      await ctx.replyWithHTML(
+        `❓ <b>Qanday ishlatiladi?</b>\n\n` +
+        `1. Instagram yoki TikTok ilovasiga kiring.\n` +
+        `2. Video ostidagi "Ulashish" (Share) tugmasini bosing va havolani nusxalang (Copy link).\n` +
+        `3. Nusxalangan havolani ushbu botga yuboring.\n` +
+        `4. Bot videoni avtomatik yuklab sizga yuboradi!`,
+        dlKeyboard
+      );
+    });
+
+    clientBot.on('text', async (ctx) => {
+      const text = ctx.message.text.trim();
+
+      if (mediaDownloader.isMediaUrl(text)) {
+        const mediaUrl = mediaDownloader.extractMediaUrl(text);
+        const isInsta = mediaDownloader.isInstagramUrl(mediaUrl);
+
+        const waitMsg = await ctx.replyWithHTML(
+          `⏳ <b>${isInsta ? 'Instagram' : 'Media'} video yuklanmoqda...</b>\n<i>Iltimos kuting (odatda 2-5 soniya)...</i>`
+        );
+
+        try {
+          const dlResult = await mediaDownloader.downloadMedia(mediaUrl);
+          if (dlResult.success && dlResult.url) {
+            try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+
+            const caption =
+              `🎬 <b>${escapeHtml(dlResult.title || 'Video')}</b>\n\n` +
+              `✅ <b>@${clientBot.botInfo?.username || 'Bot'}</b> orqali muvaffaqiyatli yuklab berildi!`;
+
+            await mediaDownloader.sendVideoToTelegram(ctx, dlResult.url, caption);
+            return;
+          } else {
+            try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+            return ctx.replyWithHTML(
+              `❌ <b>Videoni yuklab bo'lmadi!</b>\n\n${escapeHtml(dlResult.error || 'Havola xato yoki video o\'chirilgan/shaxsiy.')}\n\n<i>Iltimos, ochiq (public) video havolasini yuboring.</i>`,
+              dlKeyboard
+            );
+          }
+        } catch (err) {
+          try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+          return ctx.replyWithHTML(
+            `❌ <b>Yuklashda xatolik yuz berdi:</b>\n<i>${escapeHtml(err.message)}</i>`,
+            dlKeyboard
+          );
+        }
+      }
+
+      await ctx.replyWithHTML(
+        `📥 <b>Video yuklab olish uchun iltimos havolani yuboring!</b>\n\nMasalan: <code>https://www.instagram.com/reel/...</code>`,
+        dlKeyboard
+      );
+    });
+  }
 }
 
 const botManager = {
@@ -1951,6 +2057,15 @@ const botManager = {
 };
 
 const BOT_TEMPLATES = [
+  {
+    id: 'downloader',
+    name: '📥 Instagram & Media Yuklovchi Bot',
+    category: 'Media',
+    badge: 'Trend 🔥',
+    icon: 'download',
+    desc: 'Instagram Reels, Post, TikTok va YouTube Shorts videolarini yuqori sifatda avtomatik yuklab beruvchi bot.',
+    demo: 'Instagram yoki TikTok video havolasini yuborish'
+  },
   {
     id: 'weather',
     name: '🌦 Ob-havo Boti',

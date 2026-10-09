@@ -2,6 +2,7 @@ const { Telegraf, Markup } = require('telegraf');
 const config = require('./config');
 const db = require('./data/db');
 const botManager = require('./services/botManager');
+const mediaDownloader = require('./services/mediaDownloader');
 
 const bot = new Telegraf(config.BOT_TOKEN);
 
@@ -43,16 +44,16 @@ function getMainMenuKeyboard(userId) {
   return Markup.keyboard(rows).resize();
 }
 
-// 2. 15 ta Bot Yo'nalishlari Tugmalari (Reply Keyboard)
+// 2. 16 xil Bot Yo'nalishlari Tugmalari (Reply Keyboard)
 const botTypesKeyboard = Markup.keyboard([
-  ['🌦 Ob-havo Boti', '🕌 Namoz Vaqtlari'],
-  ['💵 Valyuta Kurslari', '📱 QR Kod Boti'],
-  ['🤖 ChatGPT / AI Boti', '🔤 Tarjimon Boti'],
-  ['🎬 Kino Topuvchi', '📢 Kanal & Avto-Post'],
-  ['🎭 Anonim Chat Boti', '🎵 Musiqa Qidiruvchi'],
-  ['🔮 Munajjimlar', '🧠 Viktorina & Test'],
-  ['📝 Bloknot & Qaydlar', '🧮 Aqlli Kalkulyator'],
-  ['📨 Taklif & Murojaat'],
+  ['📥 Video / Instagram Yuklovchi', '🌦 Ob-havo Boti'],
+  ['🕌 Namoz Vaqtlari', '💵 Valyuta Kurslari'],
+  ['📱 QR Kod Boti', '🤖 ChatGPT / AI Boti'],
+  ['🔤 Tarjimon Boti', '🎬 Kino Topuvchi'],
+  ['📢 Kanal & Avto-Post', '🎭 Anonim Chat Boti'],
+  ['🎵 Musiqa Qidiruvchi', '🔮 Munajjimlar'],
+  ['🧠 Viktorina & Test', '📝 Bloknot & Qaydlar'],
+  ['🧮 Aqlli Kalkulyator', '📨 Taklif & Murojaat'],
   ['⬅️ Asosiy Menyu']
 ]).resize();
 
@@ -185,33 +186,35 @@ bot.hears('🤖 Bot Yaratish', async (ctx) => {
   userStates.set(userId, { step: 'choose_bot_type' });
 
   const text = 
-`🤖 <b>Qanday turdagi Bot yaratmoqchisiz? (Jami 15 xil Bot):</b>
+`🤖 <b>Qanday turdagi Bot yaratmoqchisiz? (Jami 16 xil Bot):</b>
 
 📊 Sizning botlaringiz: <b>${userBots.length}/${maxBots} ta</b> (${tariffObj.name})
 
-1. 🌦 <b>Ob-havo Boti</b> — Real vaqtdagi harorat, shamol va GPS ob-havo
-2. 🕌 <b>Namoz Vaqtlari Boti</b> — O'zbekiston viloyatlari bo'yicha aniq namoz vaqtlari
-3. 💵 <b>Valyuta Kurslari Boti</b> — Markaziy bank kursi (USD, EUR, RUB) va kalkulyator
-4. 📱 <b>QR Kod Boti</b> — Matn, havola yoki telefonni QR-kodga aylantirish
-5. 🤖 <b>ChatGPT / AI Boti</b> — Aqlli savol-javob sun'iy intellekt boti
-6. 🔤 <b>Tarjimon Boti</b> — O'zbek, Rus va Ingliz tillarida tezkor tarjimon
-7. 🎬 <b>Kino Topuvchi Boti</b> — Kod orqali kinolarni topib beruvchi bot
-8. 📢 <b>Kanal & Avto-Post Boti</b> — Kanallarga chiroyli postlar joylash boti
-9. 🎭 <b>Anonim Chat Boti</b> — Tasodifiy begona bilan suhbat va maxfiy xabarlar
-10. 🎵 <b>Musiqa Qidiruvchi</b> — Nomi va ijrochi bo'yicha 320kbps musiqa topish
-11. 🔮 <b>Munajjimlar Bashorati</b> — 12 burj uchun kunlik to'liq bashorat
-12. 🧠 <b>Viktorina & Test Boti</b> — Intellektual savollar va ball yig'ish o'yini
-13. 📝 <b>Bloknot & Qaydlar Boti</b> — Shaxsiy rejalar va eslatmalar daftari
-14. 🧮 <b>Aqlli Kalkulyator Boti</b> — Matematik amallar, kredit va foiz hisoblash
-15. 📨 <b>Taklif & Murojaat Boti</b> — Mijozlar murojaatlarini qabul qilish boti
+1. 📥 <b>Video / Instagram Yuklovchi</b> — Instagram Reels, TikTok, YouTube Shorts yuklovchi bot
+2. 🌦 <b>Ob-havo Boti</b> — Real vaqtdagi harorat, shamol va GPS ob-havo
+3. 🕌 <b>Namoz Vaqtlari Boti</b> — O'zbekiston viloyatlari bo'yicha aniq namoz vaqtlari
+4. 💵 <b>Valyuta Kurslari Boti</b> — Markaziy bank kursi (USD, EUR, RUB) va kalkulyator
+5. 📱 <b>QR Kod Boti</b> — Matn, havola yoki telefonni QR-kodga aylantirish
+6. 🤖 <b>ChatGPT / AI Boti</b> — Aqlli savol-javob sun'iy intellekt boti
+7. 🔤 <b>Tarjimon Boti</b> — O'zbek, Rus va Ingliz tillarida tezkor tarjimon
+8. 🎬 <b>Kino Topuvchi Boti</b> — Kod orqali kinolarni topib beruvchi bot
+9. 📢 <b>Kanal & Avto-Post Boti</b> — Kanallarga chiroyli postlar joylash boti
+10. 🎭 <b>Anonim Chat Boti</b> — Tasodifiy begona bilan suhbat va maxfiy xabarlar
+11. 🎵 <b>Musiqa Qidiruvchi</b> — Nomi va ijrochi bo'yicha 320kbps musiqa topish
+12. 🔮 <b>Munajjimlar Bashorati</b> — 12 burj uchun kunlik to'liq bashorat
+13. 🧠 <b>Viktorina & Test Boti</b> — Intellektual savollar va ball yig'ish o'yini
+14. 📝 <b>Bloknot & Qaydlar Boti</b> — Shaxsiy rejalar va eslatmalar daftari
+15. 🧮 <b>Aqlli Kalkulyator Boti</b> — Matematik amallar, kredit va foiz hisoblash
+16. 📨 <b>Taklif & Murojaat Boti</b> — Mijozlar murojaatlarini qabul qilish boti
 
 <i>Kerakli bot yo'nalishini pastdagi klaviaturadan tanlang 👇</i>`;
 
   await ctx.replyWithHTML(text, botTypesKeyboard);
 });
 
-// Bot Turi Tanlanganda (15 ta bot)
+// Bot Turi Tanlanganda (16 ta bot)
 const botTypeMap = {
+  '📥 Video / Instagram Yuklovchi': { type: 'downloader', name: 'Instagram & Video Yuklovchi Bot' },
   '🌦 Ob-havo Boti': { type: 'weather', name: 'Ob-havo Boti' },
   '🕌 Namoz Vaqtlari': { type: 'namoz', name: 'Namoz Vaqtlari Boti' },
   '💵 Valyuta Kurslari': { type: 'currency', name: 'Valyuta Kurslari Boti' },
@@ -1447,6 +1450,41 @@ bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
   const state = userStates.get(userId);
+
+  // 📥 INSTAGRAM VA MEDIA HAVOLALARINI AVTOMATIK YUKLASH (Asosiy Botda)
+  const isAwaitingInput = state && ['awaiting_broadcast', 'edit_tariff_price', 'edit_tariff_days', 'awaiting_bot_token'].includes(state.step);
+  if (!isAwaitingInput && mediaDownloader.isMediaUrl(text)) {
+    const mediaUrl = mediaDownloader.extractMediaUrl(text);
+    const isInsta = mediaDownloader.isInstagramUrl(mediaUrl);
+    const waitMsg = await ctx.replyWithHTML(
+      `⏳ <b>${isInsta ? 'Instagram' : 'Media'} video yuklanmoqda...</b>\n<i>Iltimos kuting (odatda 2-5 soniya)...</i>`
+    );
+
+    try {
+      const dlResult = await mediaDownloader.downloadMedia(mediaUrl);
+      if (dlResult.success && dlResult.url) {
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+
+        const caption =
+          `🎬 <b>${escapeHtml(dlResult.title || (isInsta ? 'Instagram Video' : 'Video'))}</b>\n\n` +
+          `📥 @${ctx.botInfo?.username || 'MakerBot'} orqali yuklab berildi\n\n` +
+          `🤖 <i>O'zingiz ham shunday video yuklovchi yoki boshqa bot ochishni xohlaysizmi? /start bosing!</i>`;
+
+        await mediaDownloader.sendVideoToTelegram(ctx, dlResult.url, caption);
+        return;
+      } else {
+        try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+        return ctx.replyWithHTML(
+          `❌ <b>Videoni yuklab bo'lmadi!</b>\n\n${escapeHtml(dlResult.error || 'Havola xato yoki video o\'chirilgan/shaxsiy.')}\n\n<i>Iltimos, ochiq (public) post yoki reels havolasini yuboring.</i>`
+        );
+      }
+    } catch (err) {
+      try { await ctx.deleteMessage(waitMsg.message_id); } catch (e) {}
+      return ctx.replyWithHTML(
+        `❌ <b>Yuklashda xatolik yuz berdi:</b>\n<i>${escapeHtml(err.message)}</i>`
+      );
+    }
+  }
 
   if (!state) return;
 
